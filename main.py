@@ -1,17 +1,41 @@
-from fastapi import FastAPI
-from config import setup_logging
-from routers.analyze import router as analyze_router
 import logging
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from config import setup_logging
+from api.routes import auth, signals, mentor, codegen, backtest
 
 setup_logging()
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="ForexGPT Backend")
+app = FastAPI(
+    title="ForexGPT API",
+    description="Backend for ForexGPT — signal extraction, mentor, code generation, and backtesting.",
+    version="0.1.0",
+)
 
-# ✅ THIS LINE WAS MISSING
-app.include_router(analyze_router)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-@app.get("/health")
+app.include_router(auth.router)
+app.include_router(signals.router)
+app.include_router(mentor.router)
+app.include_router(codegen.router)
+app.include_router(backtest.router)
+
+
+@app.get("/health", tags=["Health"])
 def health_check():
-    logger.info("Health check endpoint called")
+    logger.info("Health check called.")
     return {"status": "running"}
+
+
+
+
+
+

@@ -1,10 +1,27 @@
+import logging
 from fastapi import HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from core.database import get_supabase
 
+logger = logging.getLogger(__name__)
 security = HTTPBearer()
+
 
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
-
-    # For now: mock verification
-    return {"user_id": "mock_user", "token": token}
+    try:
+        client = get_supabase()
+        user_response = client.auth.get_user(token)
+        if user_response.user is None:
+            raise HTTPException(status_code=401, detail="Invalid or expired token.")
+        logger.info(f"Token verified for user: {user_response.user.id}")
+        return {
+            "user_id": str(user_response.user.id),
+            "email": user_response.user.email,
+            "token": token,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"Token verification failed: {e}")
+        raise HTTPException(status_code=401, detail="Invalid or expired token.")

@@ -1,6 +1,6 @@
 # ForexGPT Backend
 
-## 📌 Overview
+## Overview
 
 ForexGPT Backend is a FastAPI-based REST API responsible for generating structured forex trading signals based on user input prompts.
 
@@ -14,7 +14,7 @@ The system follows a modular, service-layer architecture designed for scalabilit
 
 ---
 
-## 🏗️ Architecture Overview
+## Architecture Overview
 
 Client → Supabase Auth → FastAPI Backend → Signal Logic → Response
 
@@ -36,4 +36,4 @@ Client → Supabase Auth → FastAPI Backend → Signal Logic → Response
 
 ---
 
-## 📁 Project Structure
+## Project Structure
