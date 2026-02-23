@@ -37,3 +37,15 @@ Client → Supabase Auth → FastAPI Backend → Signal Logic → Response
 ---
 
 ## Project Structure
+
+## Supabase Execution
+--- Day 1:
+- Supabase Setup 
+- Created project
+- Defined database schema (users, signals, backtests, strategies, conversations, activity_log) 
+- Supabase DB schema 
+
+--- Day 2: 
+- Auth Integration 
+- Integrate Supabase auth in backend (login, register, JWT) 
+- Auth endpoints working
