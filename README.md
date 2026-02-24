@@ -42,7 +42,7 @@ Client → Supabase Auth → FastAPI Backend → Signal Logic → Response
 --- Day 1:
 - Supabase Setup 
 - Created project
-- Defined database schema (users, signals, backtests, strategies, conversations, activity_log) 
+- Defined database schema (users, signals, quant_finance, backtests, strategies, conversations, activity_log) 
 - Supabase DB schema 
 
 --- Day 2: 
