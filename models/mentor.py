@@ -110,6 +110,7 @@ class MentorAskRequest(BaseModel):
         "include_examples":  True,
         "include_formulas":  False,
     }}}
+    
 
 class MentorMessageResponse(BaseModel):
     """Single message row — returned after a question is answered."""

@@ -53,7 +53,6 @@ logger = logging.getLogger(__name__)
 
 _client: Optional[Client] = None
 
-
 def get_db() -> Client:
     """Return (or lazily create) the Supabase service_role client singleton."""
     global _client
@@ -140,8 +139,7 @@ class MentorRepo:
     def set_feedback(self, message_id: str, thumbs_up: bool) -> None:
         self._msg.update({"thumbs_up": thumbs_up}).eq("id", message_id).execute()
 
-
-# ── Quant Finance ─────────────────────────────────────────────────────────────
+# Quant Finance 
 # api/routes/quant_finance.py, services/quant_finance_service.py
 
 class QuantRepo:
@@ -190,8 +188,7 @@ class QuantRepo:
     def set_feedback(self, message_id: str, thumbs_up: bool) -> None:
         self._msg.update({"thumbs_up": thumbs_up}).eq("id", message_id).execute()
 
-
-# ── Signals ───────────────────────────────────────────────────────────────────
+# Signals 
 # api/routes/signals.py, services/signal_service.py
 
 class SignalsRepo:
@@ -235,8 +232,7 @@ class SignalsRepo:
     def update(self, signal_id: str, data: dict) -> None:
         self._t.update(data).eq("id", signal_id).execute()
 
-
-# ── Strategies ────────────────────────────────────────────────────────────────
+# Strategies 
 # api/routes/codegen.py, services/codegen_service.py
 
 class StrategiesRepo:
@@ -268,8 +264,7 @@ class StrategiesRepo:
     def get_leaderboard(self, limit: int = 20) -> list[dict]:
         return get_db().table("strategy_leaderboard").select("*").limit(limit).execute().data
 
-
-# ── Backtests ─────────────────────────────────────────────────────────────────
+# Backtests 
 # api/routes/backtest.py, services/backtest_service.py
 
 class BacktestsRepo:

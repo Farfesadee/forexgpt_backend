@@ -1,6 +1,6 @@
 import logging
 from core.hf_client import hf_client
-from core.database import get_supabase
+from core.database import get_db
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,6 @@ Always include:
 
 Output only valid Python code. No explanations outside the code."""
 
-
 async def ask_mentor(question: str, context: str | None, user_id: str | None) -> dict:
     user_message = question
     if context:
@@ -41,7 +40,7 @@ async def ask_mentor(question: str, context: str | None, user_id: str | None) ->
     conversation_id = None
     if user_id:
         try:
-            db = get_supabase()
+            db = get_db()
             record = db.table("conversations").insert({
                 "user_id": user_id,
                 "question": question,
@@ -52,7 +51,6 @@ async def ask_mentor(question: str, context: str | None, user_id: str | None) ->
             logger.warning(f"Could not save conversation to DB: {e}")
 
     return {"answer": answer, "conversation_id": conversation_id}
-
 
 async def generate_code(strategy_description: str, user_id: str | None) -> dict:
     try:
