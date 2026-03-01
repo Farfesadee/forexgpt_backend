@@ -186,7 +186,6 @@ async def get_result(
         raise HTTPException(status_code=500, detail="Failed to retrieve backtest results.")
 
 # GET /backtest/results
-
 @router.get(
     "/results",
     response_model=BacktestListResponse,

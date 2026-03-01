@@ -1,11 +1,10 @@
 import logging
 from core.hf_client import hf_client
-from core.llm_router import RequestType, get_system_prompt
-from core.database import get_supabase
+from core.database import get_db
 
 logger = logging.getLogger(__name__)
 
-# ─── 50 Quant Finance Topics ─────────────────────────────────
+# 50 Quant Finance Topics 
 
 QUANT_TOPICS = [
     # Beginner
@@ -64,7 +63,6 @@ QUANT_TOPICS = [
     {"id": "crypto_quant", "title": "Crypto Quantitative Finance", "difficulty": "advanced", "category": "Forex", "description": "Applying quant methods to cryptocurrency markets."},
 ]
 
-
 def search_topics(query: str) -> list[dict]:
     """Search topics by title, category, or description."""
     query_lower = query.lower()
@@ -75,11 +73,9 @@ def search_topics(query: str) -> list[dict]:
         or query_lower in t["description"].lower()
     ]
 
-
 def get_topic(topic_id: str) -> dict | None:
     """Get a single topic by ID."""
     return next((t for t in QUANT_TOPICS if t["id"] == topic_id), None)
-
 
 def get_related_topics(topic_id: str) -> list[dict]:
     """Get topics in the same category, excluding the current one."""
@@ -90,7 +86,6 @@ def get_related_topics(topic_id: str) -> list[dict]:
         t for t in QUANT_TOPICS
         if t["category"] == topic["category"] and t["id"] != topic_id
     ][:5]
-
 
 async def ask_quant(
     question: str,
@@ -139,7 +134,7 @@ async def ask_quant(
     conversation_id = None
     if user_id:
         try:
-            db = get_supabase()
+            db = get_db()
             record = db.table("conversations").insert({
                 "user_id": user_id,
                 "question": question,

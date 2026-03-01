@@ -19,16 +19,13 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 from enum import Enum
-
 import anthropic
-
 from core.config import settings
 from core.system_prompts import SYSTEM_PROMPTS
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__) 
 
 # Result dataclass 
-
 @dataclass
 class LLMResult:
     content:       str
@@ -167,7 +164,6 @@ async def _route_mentor(ctx) -> LLMResult:
     )
 
 # Public router singleton 
-
 class LLMRouter:
     """
     Singleton router. Initialise at startup via await llm_router.initialize().
@@ -185,6 +181,5 @@ class LLMRouter:
     @property
     def mistral_available(self) -> bool:
         return bool(_mistral_available)
-
 
 llm_router = LLMRouter()
