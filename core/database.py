@@ -1,31 +1,3 @@
-# import logging
-# from supabase import create_client, Client
-# from config import get_settings
-
-# logger = logging.getLogger(__name__)
-
-# _client: Client | None = None
-
-
-# def get_supabase() -> Client:
-#     global _client
-#     if _client is None:
-#         settings = get_settings()
-#         _client = create_client(
-#             settings.supabase_url,
-#             settings.supabase_service_role_key,
-#         )
-#         logger.info("Supabase DB client initialised.")
-#     return _client
-
-
-# def get_supabase_auth() -> Client:
-#     settings = get_settings()
-#     return create_client(
-#         settings.supabase_url,
-#         settings.supabase_anon_key,
-#     )
-
 
 """
 core/database.py — Supabase Client & Repository Layer
@@ -64,7 +36,6 @@ def get_db() -> Client:
         logger.info("Supabase client initialised")
     return _client
 
-
 # Profiles section
 # api/routes/auth.py, models/user.py
 
@@ -94,10 +65,8 @@ class ProfilesRepo:
             "p_module":  module,
         }).execute()
 
-
 # Mentor 
 # api/routes/mentor.py, services/mentor_service.py
-
 class MentorRepo:
     @property
     def _conv(self): return get_db().table("mentor_conversations")
@@ -141,7 +110,6 @@ class MentorRepo:
 
 # Quant Finance 
 # api/routes/quant_finance.py, services/quant_finance_service.py
-
 class QuantRepo:
     @property
     def _sess(self): return get_db().table("quant_sessions")
@@ -234,7 +202,6 @@ class SignalsRepo:
 
 # Strategies 
 # api/routes/codegen.py, services/codegen_service.py
-
 class StrategiesRepo:
     @property
     def _t(self): return get_db().table("strategies")
@@ -266,7 +233,6 @@ class StrategiesRepo:
 
 # Backtests 
 # api/routes/backtest.py, services/backtest_service.py
-
 class BacktestsRepo:
     @property
     def _bt(self):  return get_db().table("backtests")
@@ -326,9 +292,8 @@ class BacktestsRepo:
         )
 
 
-# ── LLM Request Log ───────────────────────────────────────────────────────────
+# LLM Request Log 
 # core/llm_router.py
-
 class LLMLogRepo:
     def log(
         self,
@@ -372,10 +337,8 @@ class LLMLogRepo:
         """Returns the llm_router_stats view — adapter performance summary."""
         return get_db().table("llm_router_stats").select("*").execute().data
 
-
-# ── Activity Log ──────────────────────────────────────────────────────────────
+# Activity Log 
 # all api/routes/*.py
-
 class ActivityRepo:
     def log(
         self,
@@ -393,9 +356,7 @@ class ActivityRepo:
             "p_metadata":    metadata or {},
         }).execute()
 
-
-# ── Single Database Access Object ─────────────────────────────────────────────
-
+# Single Database Access Object 
 class Database:
     """
     Single import point for all repos.
@@ -414,6 +375,5 @@ class Database:
     backtests  = BacktestsRepo()
     llm_log    = LLMLogRepo()
     activity   = ActivityRepo()
-
 
 db = Database()
