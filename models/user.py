@@ -13,12 +13,12 @@ from enum import Enum
 
 # Enums 
 
-class ExperienceLevel(str, Enum):
-    BEGINNER     = "beginner"
-    INTERMEDIATE = "intermediate"
-    ADVANCED     = "advanced"
+# class ExperienceLevel(str, Enum):
+#     BEGINNER     = "beginner"
+#     INTERMEDIATE = "intermediate"
+#     ADVANCED     = "advanced"
 
-# Auth Request Schemas 
+# # Auth Request Schemas 
 
 class RegisterRequest(BaseModel):
     email:        EmailStr
@@ -126,7 +126,6 @@ class ProfileUpdateRequest(BaseModel):
     """Fields the user can self-update. All optional."""
     display_name:     Optional[str] = Field(None, min_length=2, max_length=80)
     avatar_url:       Optional[str] = Field(None, max_length=500)
-    experience_level: Optional[ExperienceLevel] = None
     preferred_pairs:  Optional[List[str]] = None
     timezone:         Optional[str] = Field(None, max_length=60)
 
@@ -151,7 +150,6 @@ class UserDashboard(BaseModel):
     id:               str
     display_name:     Optional[str]
     email:            str
-    experience_level: ExperienceLevel
     preferred_pairs:  List[str]
 
     # Per-module counters
