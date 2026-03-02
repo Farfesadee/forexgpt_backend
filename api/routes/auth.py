@@ -80,7 +80,6 @@ def _build_user_profile(raw: dict) -> UserProfile:
     )
 
 # Registration section
-
 @router.post(
     "/register",
     response_model=RegisterResponse,
@@ -139,7 +138,6 @@ async def register(body: RegisterRequest):
     )
 
 # Login Section
-
 @router.post(
     "/login",
     response_model=LoginResponse,
