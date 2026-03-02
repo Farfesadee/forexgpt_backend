@@ -26,11 +26,9 @@ Two verification modes:
 import logging
 import time
 from typing import Optional
-
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt, ExpiredSignatureError
-
 from core.config import settings
 from models.user import JWTPayload
 
@@ -40,7 +38,6 @@ logger = logging.getLogger(__name__)
 _bearer_scheme = HTTPBearer(auto_error=False)
 
 # Core Verification 
-
 def _verify_jwt(token: str) -> JWTPayload:
     """
     Verify a Supabase JWT locally using the project's JWT secret.
