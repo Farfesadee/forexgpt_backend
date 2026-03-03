@@ -1,5 +1,5 @@
 import logging
-from core.database import get_supabase
+# from core.database import get_supabase
 
 logger = logging.getLogger(__name__)
 

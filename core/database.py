@@ -17,7 +17,7 @@ The React frontend uses the anon key → RLS enforced.
 """
 
 import logging
-from typing import Optional
+from typing import Optional, List
 from supabase import create_client, Client
 from core.config import settings
 
@@ -74,7 +74,7 @@ class MentorRepo:
     def _msg(self):  return get_db().table("mentor_messages")
 
     # Conversations
-    def list_conversations(self, user_id: str, include_archived: bool = False, limit: int = 30) -> list[dict]:
+    def list_conversations(self, user_id: str, include_archived: bool = False, limit: int = 30) -> List[dict]:
         q = get_db().table("mentor_history").select("*").eq("user_id", user_id)
         if not include_archived:
             q = q.eq("is_archived", False)
@@ -88,7 +88,7 @@ class MentorRepo:
         self._conv.update({"is_archived": True}).eq("id", conversation_id).execute()
 
     # Messages
-    def get_history(self, conversation_id: str, limit: int = 40) -> list[dict]:
+    def get_history(self, conversation_id: str, limit: int = 40) -> List[dict]:
         """
         Returns the last N messages for conversation context.
         mentor_service.py passes these as the messages[] array to the LLM.
@@ -103,54 +103,6 @@ class MentorRepo:
 
     def add_message(self, conversation_id: str, user_id: str, role: str, content: str, **meta) -> dict:
         payload = {"conversation_id": conversation_id, "user_id": user_id, "role": role, "content": content, **meta}
-        return self._msg.insert(payload).execute().data[0]
-
-    def set_feedback(self, message_id: str, thumbs_up: bool) -> None:
-        self._msg.update({"thumbs_up": thumbs_up}).eq("id", message_id).execute()
-
-# Quant Finance 
-# api/routes/quant_finance.py, services/quant_finance_service.py
-class QuantRepo:
-    @property
-    def _sess(self): return get_db().table("quant_sessions")
-    @property
-    def _msg(self):  return get_db().table("quant_messages")
-
-    # Sessions
-    def list_sessions(self, user_id: str, domain: Optional[str] = None, limit: int = 30) -> list[dict]:
-        q = get_db().table("quant_history").select("*").eq("user_id", user_id).eq("is_archived", False)
-        if domain:
-            q = q.eq("quant_domain", domain)
-        return q.limit(limit).execute().data
-
-    def create_session(self, user_id: str, quant_domain: str = "general", difficulty: str = "intermediate") -> dict:
-        res = self._sess.insert({
-            "user_id": user_id,
-            "quant_domain": quant_domain,
-            "difficulty": difficulty,
-        }).execute()
-        return res.data[0]
-
-    def archive_session(self, session_id: str) -> None:
-        self._sess.update({"is_archived": True}).eq("id", session_id).execute()
-
-    def get_domain_stats(self, user_id: str) -> list[dict]:
-        """Per-domain usage breakdown — used by quant_finance_service for suggestions."""
-        return get_db().rpc("get_quant_domain_stats", {"p_user_id": user_id}).execute().data
-
-    # Messages
-    def get_history(self, session_id: str, limit: int = 40) -> list[dict]:
-        """Returns messages for LLM context window — quant_finance_service.py."""
-        return (
-            self._msg.select("role, content, created_at, contains_formula, system_prompt_key, thumbs_up")
-            .eq("session_id", session_id)
-            .order("created_at")
-            .limit(limit)
-            .execute().data
-        )
-
-    def add_message(self, session_id: str, user_id: str, role: str, content: str, **meta) -> dict:
-        payload = {"session_id": session_id, "user_id": user_id, "role": role, "content": content, **meta}
         return self._msg.insert(payload).execute().data[0]
 
     def set_feedback(self, message_id: str, thumbs_up: bool) -> None:
@@ -174,7 +126,7 @@ class SignalsRepo:
         saved_only: bool = False,
         limit: int = 20,
         offset: int = 0,
-    ) -> list[dict]:
+    ) ->List[dict]:
         q = (
             self._t.select(
                 "id, source_type, source_label, base_currency, primary_sentiment, "
@@ -191,7 +143,7 @@ class SignalsRepo:
     def get(self, signal_id: str) -> dict:
         return self._t.select("*").eq("id", signal_id).single().execute().data
 
-    def get_for_pair(self, user_id: str, pair: str, source_type: Optional[str] = None, limit: int = 20) -> list[dict]:
+    def get_for_pair(self, user_id: str, pair: str, source_type: Optional[str] = None, limit: int = 20) -> List[dict]:
         return get_db().rpc("get_signals_for_pair", {
             "p_user_id": user_id, "p_pair": pair,
             "p_source_type": source_type, "p_limit": limit, "p_offset": 0,
@@ -209,7 +161,7 @@ class StrategiesRepo:
     def create(self, user_id: str, data: dict) -> dict:
         return self._t.insert({"user_id": user_id, **data}).execute().data[0]
 
-    def list(self, user_id: str, strategy_type: Optional[str] = None, limit: int = 30) -> list[dict]:
+    def list(self, user_id: str, strategy_type: Optional[str] = None, limit: int = 30) -> List[dict]:
         q = (
             self._t.select(
                 "id, name, description, strategy_type, target_pairs, timeframe, "
@@ -228,7 +180,7 @@ class StrategiesRepo:
     def delete(self, strategy_id: str) -> None:
         self._t.delete().eq("id", strategy_id).execute()
 
-    def get_leaderboard(self, limit: int = 20) -> list[dict]:
+    def get_leaderboard(self, limit: int = 20) -> List[dict]:
         return get_db().table("strategy_leaderboard").select("*").limit(limit).execute().data
 
 # Backtests 
@@ -261,14 +213,14 @@ class BacktestsRepo:
             "improvement_suggestions":  results.get("improvement_suggestions", []),
         }).eq("id", backtest_id).execute()
 
-    def save_trades(self, backtest_id: str, user_id: str, trades: list[dict]) -> None:
+    def save_trades(self, backtest_id: str, user_id: str, trades: List[dict]) -> None:
         if not trades:
             return
         rows = [{"backtest_id": backtest_id, "user_id": user_id, "trade_number": i + 1, **t}
                 for i, t in enumerate(trades)]
         self._tr.insert(rows).execute()
 
-    def list(self, user_id: str, pair: Optional[str] = None, limit: int = 20) -> list[dict]:
+    def list(self, user_id: str, pair: Optional[str] = None, limit: int = 20) -> List[dict]:
         q = (
             self._bt.select(
                 "id, strategy_id, pair, start_date, end_date, timeframe, "
@@ -282,7 +234,7 @@ class BacktestsRepo:
     def get(self, backtest_id: str) -> dict:
         return self._bt.select("*").eq("id", backtest_id).single().execute().data
 
-    def get_trades(self, backtest_id: str, limit: int = 500, offset: int = 0) -> list[dict]:
+    def get_trades(self, backtest_id: str, limit: int = 500, offset: int = 0) -> List[dict]:
         return (
             self._tr.select("*")
             .eq("backtest_id", backtest_id)
@@ -333,7 +285,7 @@ class LLMLogRepo:
         }).execute()
         return res.data
 
-    def get_stats(self) -> list[dict]:
+    def get_stats(self) -> List[dict]:
         """Returns the llm_router_stats view — adapter performance summary."""
         return get_db().table("llm_router_stats").select("*").execute().data
 
@@ -369,7 +321,6 @@ class Database:
     """
     profiles   = ProfilesRepo()
     mentor     = MentorRepo()
-    quant      = QuantRepo()
     signals    = SignalsRepo()
     strategies = StrategiesRepo()
     backtests  = BacktestsRepo()
@@ -378,3 +329,10 @@ class Database:
 
 db = Database()
 
+# from supabase import create_client, Client
+# from core.config import settings
+
+# def get_supabase_client() -> Client:
+#     return create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+
+# supabase = get_supabase_client()

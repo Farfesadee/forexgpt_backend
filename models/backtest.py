@@ -110,6 +110,22 @@ class DeleteBacktestResponse(BaseModel):
     message: str
     backtest_id: str
 
+class BacktestUpdateRequest(BaseModel):
+    is_saved: Optional[bool] = None
+    user_notes: Optional[str] = None
+
+class BacktestFilterParams(BaseModel):
+    pair: Optional[str] = None
+    limit: int = 20
+    offset: int = 0
+
+
+# Aliases to match route imports
+BacktestRunRequest = RunBacktestRequest
+BacktestResponse = RunBacktestResponse
+BacktestListResponse = SavedBacktestResponse  # or create a proper list wrapper
+BacktestTradeListResponse = SavedBacktestResponse  # adjust as needed
+
 
 # class BacktestStatisticsResponse(BaseModel):
 #     """Summary statistics across all of a user's backtests."""

@@ -49,7 +49,7 @@ router = APIRouter()
 # _ was used to indicate "private" (meant to be used only within this module), but it's needed in multiple endpoints so it's defined as a helper function instead of a global variable.
 
 def _auth_client() -> Client:
-    return create_client(settings.SUPABASE_URL, settings.SUPABASE_ANON_KEY)
+    return create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
 
 def _build_token_pair(session) -> TokenPair:
     """Convert a Supabase session object into our TokenPair schema."""
