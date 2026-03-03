@@ -13,10 +13,10 @@ from enum import Enum
 
 # Enums 
 
-# class ExperienceLevel(str, Enum):
-#     BEGINNER     = "beginner"
-#     INTERMEDIATE = "intermediate"
-#     ADVANCED     = "advanced"
+class ExperienceLevel(str, Enum):
+    BEGINNER     = "beginner"
+    INTERMEDIATE = "intermediate"
+    ADVANCED     = "advanced"
 
 # # Auth Request Schemas 
 

@@ -2,11 +2,11 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from config import setup_logging
+# from config import setup_logging
 from api.routes import auth, signals, mentor, codegen, backtest
-from api.routes import quant_finance 
+# from api.routes import quant_finance 
 
-setup_logging()
+# setup_logging()
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
@@ -28,7 +28,7 @@ app.include_router(signals.router)
 app.include_router(mentor.router)
 app.include_router(codegen.router)
 app.include_router(backtest.router)
-app.include_router(quant_finance.router)
+# app.include_router(quant_finance.router)
 
 
 @app.get("/health", tags=["Health"])
