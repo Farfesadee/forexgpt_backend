@@ -43,7 +43,6 @@ from models.user import (
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-
 # Supabase Auth client (uses anon key for auth operations)
 # Note: auth operations use the anon key, not the service_role key.
 # The service_role key is used only for DB reads/writes in core/database.py.
