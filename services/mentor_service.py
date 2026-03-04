@@ -403,43 +403,36 @@ class MentorService:
         message: str,
         conversation_id: Optional[str] = None,
     ) -> Dict:
-        """
-        Ask the mentor a question.
-        Pass conversation_id to continue an existing conversation.
-        Omit it (or pass None) to start a new one.
-
-        Returns:
-            response:        The mentor's answer
-            conversation_id: Save this and pass it back for follow-up messages
-            message_count:   Total messages in this conversation so far
-            timestamp:       ISO timestamp of this response
-        """
         try:
-            # Load existing conversation or start a new one
+            # 1. Load existing conversation or start a new one
             if conversation_id:
                 logger.info(f"Continuing conversation {conversation_id} for user {user_id}")
                 history = self._load_history(conversation_id, user_id)
                 if history is None:
-                    # Not found or belongs to another user — start fresh
                     logger.warning(f"Conversation {conversation_id} not found or unauthorized")
                     conversation_id = str(uuid.uuid4())
                     history = []
+                    # INSERT HERE: The ID was missing or invalid, so we treat it as a new creation
+                    db.mentor.create_conversation(id=conversation_id, user_id=user_id, title=message[:80])
             else:
                 logger.info(f"Starting new conversation for user {user_id}")
                 conversation_id = str(uuid.uuid4())
                 history = []
+                # INSERT HERE: This is a brand new conversation
+                db.mentor.create_conversation(id=conversation_id, user_id=user_id, title=message[:80])
 
-            # Build full message array: system prompt + history + new message
+            # 2. Build full message array
             messages = [
                 {"role": "system", "content": self.system_prompt},
                 *history,
                 {"role": "user", "content": message},
             ]
 
-            # Call Mistral
+            # 3. Call Mistral
             response = await self._generate_response(messages)
 
-            # Persist both turns to DB
+            # 4. Persist both turns to DB
+            # This will now succeed because the Foreign Key (conversation_id) exists!
             db.mentor.add_message(
                 conversation_id=conversation_id,
                 user_id=user_id,
@@ -452,6 +445,8 @@ class MentorService:
                 role="assistant",
                 content=response,
             )
+            
+            # ... rest of the code
 
             message_count = len(history) + 2  # history + user msg + assistant msg
 

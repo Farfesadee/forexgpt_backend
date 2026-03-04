@@ -19,7 +19,6 @@ class ExperienceLevel(str, Enum):
     ADVANCED     = "advanced"
 
 # # Auth Request Schemas 
-
 class RegisterRequest(BaseModel):
     email:        EmailStr
     password:     str = Field(..., min_length=8, max_length=128)
@@ -35,7 +34,7 @@ class RegisterRequest(BaseModel):
         return v
 
     model_config = {"json_schema_extra": {"example": {
-        "email": "trader@example.com",
+        "email": "trader@gmail.com",
         "password": "SecurePass1",
         "display_name": "Alex Trader",
     }}}
@@ -68,6 +67,27 @@ class PasswordUpdateRequest(BaseModel):
             raise ValueError("Password must contain at least one digit")
         return v
 
+class EmailConfirmRequest(BaseModel):
+    """
+    POST /auth/confirm
+
+    The frontend extracts these two values from the URL query params that
+    Supabase appends to the confirmation link:
+      {SITE_URL}/auth/confirm?token_hash=<token_hash>&type=signup
+
+    token_hash : the opaque token from the URL — pass it through verbatim
+    type       : always "signup" for email confirmation links;
+                 "recovery" for password-reset links (handled by /auth/password-update)
+    """
+    token_hash: str = Field(..., min_length=10, description="The token_hash param from the confirmation URL.")
+    type:       str = Field("signup", pattern="^(signup|recovery|invite|email_change)$",
+                            description="OTP type from the URL — almost always 'signup'.")
+
+    model_config = {"json_schema_extra": {"example": {
+        "token_hash": "pkce_6b4f2e1a9c3d8f7e2b5a4c1d9e8f3a2b...",
+        "type":       "signup",
+    }}}
+    
 class OAuthCallbackRequest(BaseModel):
     """For Google / GitHub OAuth — frontend sends the code from the OAuth redirect."""
     provider: str = Field(..., pattern="^(google|github)$")
@@ -109,13 +129,6 @@ class UserProfile(BaseModel):
     preferred_pairs:  List[str]
     timezone:         str
     
-    # Usage counters (read-only — incremented by services)
-    mentor_questions_asked:   int = 0
-    quant_questions_asked:    int = 0
-    signals_extracted:        int = 0
-    strategies_generated:     int = 0
-    backtests_run:            int = 0
-
     created_at: datetime
     updated_at: datetime
 
