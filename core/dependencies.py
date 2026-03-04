@@ -37,6 +37,7 @@ from core.config import settings
 from services.mentor_service import MentorService
 from services.codegen_service import CodeGenService
 from services.signal_service import SignalService
+from services.backtest_service import BacktestService
 
 
 def get_mentor_service() -> MentorService:
@@ -58,3 +59,7 @@ def get_signal_service() -> SignalService:
         hf_client=hf_client,
         model_id=settings.SIGNAL_MODEL_ID,
     )
+
+
+def get_backtest_service() -> BacktestService:
+    return BacktestService()
