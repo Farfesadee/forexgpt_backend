@@ -27,7 +27,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from api.middleware.auth_middleware import get_current_user
 from models.user import JWTPayload
 from models.backtest import (
-    BacktestRunRequest,
+    RunBacktestRequest,
     BacktestResponse,
     BacktestListResponse,
     BacktestTradeListResponse,
@@ -83,7 +83,7 @@ def generate_signals(df: pd.DataFrame) -> pd.DataFrame:
 """,
 )
 async def run_backtest(
-    body: BacktestRunRequest,
+    body: RunBacktestRequest,
     user: JWTPayload = Depends(get_current_user),
 ):
     """

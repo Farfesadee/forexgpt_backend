@@ -192,7 +192,7 @@ from typing import Optional
 
 class AskQuestionRequest(BaseModel):
     """Request model for asking the mentor a question"""
-    user_id: str
+    user_id: Optional[str] = None
     message: str
     conversation_id: Optional[str] = None
 

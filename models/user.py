@@ -106,7 +106,6 @@ class UserProfile(BaseModel):
     email:            str
     display_name:     Optional[str]
     avatar_url:       Optional[str]
-    experience_level: ExperienceLevel
     preferred_pairs:  List[str]
     timezone:         str
     
@@ -151,13 +150,6 @@ class UserDashboard(BaseModel):
     display_name:     Optional[str]
     email:            str
     preferred_pairs:  List[str]
-
-    # Per-module counters
-    mentor_questions_asked:   int
-    quant_questions_asked:    int
-    signals_extracted:        int
-    strategies_generated:     int
-    backtests_run:            int
 
     # Live aggregates
     active_mentor_conversations: int

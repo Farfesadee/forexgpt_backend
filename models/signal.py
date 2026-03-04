@@ -14,7 +14,7 @@ from datetime import datetime
 
 class ExtractSignalRequest(BaseModel):
     """Request model for single signal extraction"""
-    user_id: str
+    user_id: Optional[str] = None
     transcript: str
     company_name: Optional[str] = None
     save_to_db: bool = True
@@ -32,7 +32,7 @@ class ExtractSignalRequest(BaseModel):
 
 class BatchExtractRequest(BaseModel):
     """Request model for batch signal extraction"""
-    user_id: str
+    user_id: Optional[str] = None
     transcripts: list[dict]  # List of {"text": "...", "company_name": "..."}
     save_to_db: bool = True
 

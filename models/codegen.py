@@ -14,7 +14,7 @@ from typing import Optional
 
 class GenerateCodeRequest(BaseModel):
     """Request model for code generation"""
-    user_id: str
+    user_id: Optional[str] = None
     strategy_description: str
     conversation_id: Optional[str] = None
     previous_code: Optional[str] = None
