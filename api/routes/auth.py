@@ -49,7 +49,7 @@ router = APIRouter()
 # _ was used to indicate "private" (meant to be used only within this module), but it's needed in multiple endpoints so it's defined as a helper function instead of a global variable.
 
 def _auth_client() -> Client:
-    return create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
+    return create_client(settings.SUPABASE_URL, settings.SUPABASE_ANON_KEY)
 
 def _build_token_pair(session) -> TokenPair:
     """Convert a Supabase session object into our TokenPair schema."""
@@ -66,14 +66,8 @@ def _build_user_profile(raw: dict) -> UserProfile:
         email=raw["email"],
         display_name=raw.get("display_name"),
         avatar_url=raw.get("avatar_url"),
-        experience_level=raw.get("experience_level", "beginner"),
         preferred_pairs=raw.get("preferred_pairs", ["EUR/USD", "GBP/USD"]),
         timezone=raw.get("timezone", "UTC"),
-        mentor_questions_asked=raw.get("mentor_questions_asked", 0),
-        quant_questions_asked=raw.get("quant_questions_asked", 0),
-        signals_extracted=raw.get("signals_extracted", 0),
-        strategies_generated=raw.get("strategies_generated", 0),
-        backtests_run=raw.get("backtests_run", 0),
         created_at=raw["created_at"],
         updated_at=raw["updated_at"],
     )
@@ -411,6 +405,25 @@ async def update_me(
         updated_raw = db.profiles.update(user.user_id, updates)
         return ProfileUpdateResponse(profile=_build_user_profile(updated_raw))
     except Exception as e:
+        err_text = str(e)
+        # Backward-compatibility: some deployed schemas don't have preferred_pairs yet.
+        # Retry without that field so other profile fields can still be updated.
+        if "preferred_pairs" in updates and "PGRST204" in err_text and "preferred_pairs" in err_text:
+            try:
+                fallback_updates = {k: v for k, v in updates.items() if k != "preferred_pairs"}
+                if not fallback_updates:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Your profile schema does not support `preferred_pairs` yet.",
+                    )
+                updated_raw = db.profiles.update(user.user_id, fallback_updates)
+                return ProfileUpdateResponse(profile=_build_user_profile(updated_raw))
+            except HTTPException:
+                raise
+            except Exception as inner:
+                logger.error(f"Profile update fallback error for {user.user_id}: {inner}")
+                raise HTTPException(status_code=500, detail="Profile update failed.")
+
         logger.error(f"Profile update error for {user.user_id}: {e}")
         raise HTTPException(status_code=500, detail="Profile update failed.")
 

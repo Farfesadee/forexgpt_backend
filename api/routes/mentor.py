@@ -366,7 +366,7 @@
 #     except Exception:
 #         raise HTTPException(status_code=404, detail="Conversation not found.")
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from models.mentor import (
     AskQuestionRequest,
     AskQuestionResponse,
@@ -374,21 +374,40 @@ from models.mentor import (
     ConversationSummaryResponse,
     DeleteConversationResponse
 )
+from models.user import JWTPayload
+from api.middleware.auth_middleware import get_current_user
 from core.dependencies import get_mentor_service
 
 router = APIRouter(prefix="/mentor", tags=["mentor"])
 service = get_mentor_service()
 
+def _assert_user_access(requested_user_id: str, user: JWTPayload) -> None:
+    if requested_user_id != user.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only access your own resources.",
+        )
+
 
 @router.post("/ask", response_model=AskQuestionResponse)
-async def ask_question(request: AskQuestionRequest):
+async def ask_question(
+    request: AskQuestionRequest,
+    user: JWTPayload = Depends(get_current_user),
+):
     try:
+        if request.user_id and request.user_id != user.user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only ask questions for your own account.",
+            )
         result = await service.ask_question(
-            user_id=request.user_id,
+            user_id=user.user_id,
             message=request.message,
             conversation_id=request.conversation_id
         )
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         # raise HTTPException(status_code=500, detail=str(e))
         raise HTTPException(
@@ -398,17 +417,29 @@ async def ask_question(request: AskQuestionRequest):
 
 
 @router.get("/conversations/{user_id}", response_model=list[ConversationSummaryResponse])
-async def list_conversations(user_id: str, limit: int = 20):
+async def list_conversations(
+    user_id: str,
+    limit: int = 20,
+    user: JWTPayload = Depends(get_current_user),
+):
     try:
+        _assert_user_access(user_id, user)
         conversations = await service.list_user_conversations(user_id, limit)
         return conversations
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/conversations/{user_id}/{conversation_id}", response_model=ConversationHistoryResponse)
-async def get_conversation(conversation_id: str, user_id: str):
+async def get_conversation(
+    conversation_id: str,
+    user_id: str,
+    user: JWTPayload = Depends(get_current_user),
+):
     try:
+        _assert_user_access(user_id, user)
         history = await service.get_conversation_history(conversation_id, user_id)
         if history is None:
             raise HTTPException(status_code=404, detail="Conversation not found")
@@ -424,8 +455,13 @@ async def get_conversation(conversation_id: str, user_id: str):
 
 
 @router.delete("/conversations/{user_id}/{conversation_id}", response_model=DeleteConversationResponse)
-async def delete_conversation(conversation_id: str, user_id: str):
+async def delete_conversation(
+    conversation_id: str,
+    user_id: str,
+    user: JWTPayload = Depends(get_current_user),
+):
     try:
+        _assert_user_access(user_id, user)
         deleted = await service.delete_conversation(conversation_id, user_id)
         if not deleted:
             raise HTTPException(status_code=404, detail="Conversation not found")

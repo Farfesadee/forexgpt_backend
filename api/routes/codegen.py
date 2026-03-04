@@ -21,7 +21,7 @@
 #     return CodeGenResponse(**result)
 
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from models.codegen import (
     GenerateCodeRequest,
     GenerateCodeResponse,
@@ -30,22 +30,41 @@ from models.codegen import (
     CodeConversationHistoryResponse
 )
 from core.dependencies import get_codegen_service
+from api.middleware.auth_middleware import get_current_user
+from models.user import JWTPayload
 
 router = APIRouter(prefix="/codegen", tags=["codegen"])
 service = get_codegen_service()
 
+def _assert_user_access(requested_user_id: str, user: JWTPayload) -> None:
+    if requested_user_id != user.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only access your own resources.",
+        )
+
 
 @router.post("/generate", response_model=GenerateCodeResponse)
-async def generate_code(request: GenerateCodeRequest):
+async def generate_code(
+    request: GenerateCodeRequest,
+    user: JWTPayload = Depends(get_current_user),
+):
     try:
+        if request.user_id and request.user_id != user.user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only generate code for your own account.",
+            )
         result = await service.generate_code(
-            user_id=request.user_id,
+            user_id=user.user_id,
             strategy_description=request.strategy_description,
             conversation_id=request.conversation_id,
             previous_code=request.previous_code,
             error_message=request.error_message
         )
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         # raise HTTPException(status_code=500, detail=str(e))
         raise HTTPException(
@@ -55,17 +74,29 @@ async def generate_code(request: GenerateCodeRequest):
 
 
 @router.get("/codes/{user_id}", response_model=list[GeneratedCodeSummaryResponse])
-async def list_generated_codes(user_id: str, limit: int = 20):
+async def list_generated_codes(
+    user_id: str,
+    limit: int = 20,
+    user: JWTPayload = Depends(get_current_user),
+):
     try:
+        _assert_user_access(user_id, user)
         codes = await service.list_generated_codes(user_id, limit)
         return codes
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/codes/{user_id}/{code_id}", response_model=GeneratedCodeDetailResponse)
-async def get_generated_code(code_id: str, user_id: str):
+async def get_generated_code(
+    code_id: str,
+    user_id: str,
+    user: JWTPayload = Depends(get_current_user),
+):
     try:
+        _assert_user_access(user_id, user)
         code = await service.get_generated_code(code_id, user_id)
         if code is None:
             raise HTTPException(status_code=404, detail="Code not found")
@@ -77,8 +108,13 @@ async def get_generated_code(code_id: str, user_id: str):
 
 
 @router.get("/conversations/{user_id}/{conversation_id}", response_model=CodeConversationHistoryResponse)
-async def get_conversation(conversation_id: str, user_id: str):
+async def get_conversation(
+    conversation_id: str,
+    user_id: str,
+    user: JWTPayload = Depends(get_current_user),
+):
     try:
+        _assert_user_access(user_id, user)
         history = await service.get_conversation_history(conversation_id, user_id)
         if history is None:
             raise HTTPException(status_code=404, detail="Conversation not found")

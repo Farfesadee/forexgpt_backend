@@ -1,9 +1,11 @@
 import logging
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 # from config import setup_logging
 from api.routes import auth, signals, mentor, codegen, backtest
+from api.middleware.auth_middleware import get_current_user
+from models.user import JWTPayload
 # from api.routes import quant_finance 
 
 # setup_logging()
@@ -32,7 +34,7 @@ app.include_router(backtest.router)
 
 
 @app.get("/health", tags=["Health"])
-def health_check():
+def health_check(_: JWTPayload = Depends(get_current_user)):
     logger.info("Health check called.")
     return {"status": "running"}
 
