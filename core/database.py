@@ -80,9 +80,13 @@ class MentorRepo:
             q = q.eq("is_archived", False)
         return q.limit(limit).execute().data
 
-    def create_conversation(self, user_id: str, difficulty: str = "intermediate") -> dict:
-        res = self._conv.insert({"user_id": user_id, "difficulty": difficulty}).execute()
-        return res.data[0]
+    # In your database service
+    def create_conversation(self, id, user_id, title):
+        return self._conv.insert({
+            "id": id, 
+            "user_id": user_id, 
+            "title": title
+        }).execute() # .execute() returns the data created in the DB`
 
     def archive_conversation(self, conversation_id: str) -> None:
         self._conv.update({"is_archived": True}).eq("id", conversation_id).execute()
@@ -100,6 +104,7 @@ class MentorRepo:
             .limit(limit)
             .execute().data
         )
+        
 
     def add_message(self, conversation_id: str, user_id: str, role: str, content: str, **meta) -> dict:
         payload = {"conversation_id": conversation_id, "user_id": user_id, "role": role, "content": content, **meta}
@@ -108,8 +113,11 @@ class MentorRepo:
     def set_feedback(self, message_id: str, thumbs_up: bool) -> None:
         self._msg.update({"thumbs_up": thumbs_up}).eq("id", message_id).execute()
 
-# Signals 
-# api/routes/signals.py, services/signal_service.py
+
+
+
+
+
 
 class SignalsRepo:
     @property

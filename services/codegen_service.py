@@ -483,7 +483,7 @@
 """
 Code Generation Service - Strategy Translation with Conversational Debugging
 Handles initial generation, debugging, and modification of trading strategy code.
-DB calls use db.strategies repo from core.database.
+DB calls use public.generated_codes and public.codegen_conversations.
 """
 
 import uuid
@@ -493,7 +493,7 @@ from typing import Dict, List, Optional, Tuple
 from prompts.codegen_prompt import CODEGEN_SYSTEM_PROMPT
 import logging
 
-from core.database import db, get_db
+from core.database import get_db
 
 logger = logging.getLogger(__name__)
 
@@ -501,8 +501,9 @@ logger = logging.getLogger(__name__)
 class CodeGenService:
     """
     Code generation service with conversational debugging support.
-    All DB operations go through db.strategies (StrategiesRepo) and
-    get_db().table('codegen_conversations') for message history.
+    All DB operations go through:
+      - get_db().table("generated_codes")
+      - get_db().table("codegen_conversations")
 
     Three scenarios handled by generate_code():
         1. Initial generation  -- no previous_code
@@ -563,21 +564,27 @@ class CodeGenService:
             self._save_message(conversation_id, user_id, "user", user_message)
             self._save_message(conversation_id, user_id, "assistant", response)
 
-            # Save as a strategy record for easy retrieval
-            saved = db.strategies.create(user_id, {
-                "name":            strategy_description[:80],
-                "description":     strategy_description,
-                "code":            code,
-                "conversation_id": conversation_id,
-                "strategy_type":   "generated",
-            })
+            # Save generated code to generated_codes table
+            saved = (
+                get_db().table("generated_codes")
+                .insert({
+                    "id":              str(uuid.uuid4()),
+                    "user_id":         user_id,
+                    "conversation_id": conversation_id,
+                    "code":            code,
+                    "description":     strategy_description,
+                    "created_at":      datetime.utcnow().isoformat(),
+                })
+                .execute()
+            )
+            saved_row = saved.data[0] if saved and saved.data else {}
 
             logger.info(f"Code generated for conversation {conversation_id}")
             return {
                 "code":            code,
                 "explanation":     explanation,
                 "conversation_id": conversation_id,
-                "code_id":         saved.get("id"),
+                "code_id":         saved_row.get("id"),
                 "language":        "python",
                 "timestamp":       datetime.utcnow().isoformat(),
             }
@@ -586,14 +593,22 @@ class CodeGenService:
             logger.error(f"Error in generate_code: {e}", exc_info=True)
             raise
 
-    def list_generated_codes(self, user_id: str, limit: int = 20) -> List[Dict]:
+    async def list_generated_codes(self, user_id: str, limit: int = 20) -> List[Dict]:
         """List all generated strategy codes for a user (most recent first)."""
         try:
-            rows = db.strategies.list(user_id=user_id, limit=limit)
+            result = (
+                get_db().table("generated_codes")
+                .select("id, conversation_id, description, created_at")
+                .eq("user_id", user_id)
+                .order("created_at", desc=True)
+                .limit(limit)
+                .execute()
+            )
+            rows = result.data or []
             return [
                 {
                     "id":          r["id"],
-                    "name":        r.get("name", ""),
+                    "conversation_id": r.get("conversation_id"),
                     "description": (r.get("description") or "")[:100],
                     "created_at":  r.get("created_at"),
                 }
@@ -603,16 +618,23 @@ class CodeGenService:
             logger.error(f"Error listing generated codes: {e}", exc_info=True)
             raise
 
-    def get_generated_code(self, code_id: str, user_id: str) -> Optional[Dict]:
+    async def get_generated_code(self, code_id: str, user_id: str) -> Optional[Dict]:
         """Return a specific strategy by ID. None if not found or unauthorized."""
         try:
-            row = db.strategies.get(code_id)
-            if not row or row.get("user_id") != user_id:
+            result = (
+                get_db().table("generated_codes")
+                .select("*")
+                .eq("id", code_id)
+                .eq("user_id", user_id)
+                .limit(1)
+                .execute()
+            )
+            if not result.data:
                 return None
+            row = result.data[0]
             return {
                 "id":              row["id"],
                 "code":            row.get("code"),
-                "name":            row.get("name"),
                 "description":     row.get("description"),
                 "conversation_id": row.get("conversation_id"),
                 "created_at":      row.get("created_at"),
@@ -621,7 +643,7 @@ class CodeGenService:
             logger.error(f"Error retrieving generated code: {e}", exc_info=True)
             raise
 
-    def get_conversation_history(
+    async def get_conversation_history(
         self, conversation_id: str, user_id: str
     ) -> Optional[List[Dict]]:
         """Return full message history. None if unauthorized, [] if not found."""

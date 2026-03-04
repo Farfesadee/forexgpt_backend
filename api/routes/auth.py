@@ -7,6 +7,8 @@ The backend never stores passwords — Supabase handles that entirely.
 
 Endpoints:
   POST   /auth/register           Register with email + password
+  POST   /auth/confirm                 Exchange token_hash from confirmation email → session
+  POST   /auth/resend-confirmation     Resend confirmation email (expired or lost)
   POST   /auth/login              Login → returns JWT access + refresh tokens
   POST   /auth/logout             Invalidate the current session
   POST   /auth/refresh            Exchange refresh token for a new access token
@@ -19,6 +21,21 @@ Endpoints:
   GET    /auth/me/dashboard       Aggregated stats across all 5 modules
 
   GET    /auth/session            Check if current token is valid (health check)
+  
+  Email confirmation flow:
+  1. POST /auth/register  →  Supabase sends email with link to {SITE_URL}/auth/confirm?token_hash=...&type=signup
+  2. User clicks link     →  Browser navigates to your frontend at that URL
+  3. Frontend extracts token_hash + type from URL query params
+  4. Frontend calls POST /auth/confirm with those values
+  5. /auth/confirm calls Supabase verifyOtp → account activated → returns LoginResponse
+  6. Frontend stores tokens and redirects into the app
+
+  If the link expires (24h default): POST /auth/resend-confirmation
+
+Supabase dashboard requirements (fix before testing):
+  Authentication → URL Configuration → Redirect URLs:
+    Add: {SITE_URL}/auth/confirm
+    Add: {SITE_URL}/auth/reset-password
 """
 
 import logging
@@ -34,7 +51,7 @@ from models.user import (
     RefreshRequest, TokenPair,
     LogoutResponse,
     PasswordResetRequest, PasswordUpdateRequest,
-    OAuthCallbackRequest,
+    OAuthCallbackRequest, EmailConfirmRequest,
     ProfileUpdateRequest, ProfileUpdateResponse,
     UserProfile, UserDashboard,
     JWTPayload,
@@ -100,7 +117,8 @@ async def register(body: RegisterRequest):
             "options": {
                 "data": {
                     "full_name": body.display_name or body.email.split("@")[0],
-                }
+                },
+                "emailRedirectTo": f"{settings.SITE_URL}/auth/confirm",
             },
         })
     except Exception as e:
@@ -129,6 +147,142 @@ async def register(body: RegisterRequest):
         email=res.user.email,
         requires_confirmation=res.session is None,  # True if email confirmation required
     )
+# Email Confirmation Section
+@router.post(
+    "/confirm",
+    response_model=LoginResponse,
+    summary="Confirm email address and complete registration",
+)
+async def confirm_email(body: "EmailConfirmRequest"):
+    """
+    Exchanges the `token_hash` from the confirmation email link for a full session.
+
+    **Full confirmation flow:**
+    1. User registers → receives confirmation email
+    2. User clicks link → browser navigates to `{SITE_URL}/auth/confirm?token_hash=...&type=signup`
+    3. Frontend extracts `token_hash` and `type` from the URL query params
+    4. Frontend POSTs them to this endpoint: `POST /auth/confirm`
+    5. Supabase verifies the token → activates the account → returns a session
+    6. This endpoint returns the same `LoginResponse` (tokens + profile) as `/login`
+    7. Frontend stores the tokens and redirects the user into the app — they are logged in
+
+    **Request body:**
+    ```json
+    {
+      "token_hash": "pkce_...",
+      "type": "signup"
+    }
+    ```
+
+    The `token_hash` and `type` come directly from the URL params Supabase appends
+    to the confirmation link. Do not modify them.
+
+    Errors:
+    - 400: Token is malformed or was already used
+    - 410: Token has expired (Supabase default expiry: 24 hours — resend via POST /auth/resend-confirmation)
+    """
+    supabase = _auth_client()
+
+    try:
+        res = supabase.auth.verify_otp({
+            "token_hash": body.token_hash,
+            "type":       body.type,
+        })
+    except Exception as e:
+        err = str(e).lower()
+        logger.warning(f"Email confirmation failed: {e}")
+        if "expired" in err or "otp" in err:
+            raise HTTPException(
+                status_code=status.HTTP_410_GONE,
+                detail=(
+                    "This confirmation link has expired or has already been used. "
+                    "Request a new one via POST /auth/resend-confirmation."
+                ),
+            )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid confirmation link. Please request a new one.",
+        )
+
+    if res.session is None or res.user is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email confirmation failed. The link may be invalid or already used.",
+        )
+
+    # Profile was created by the DB trigger on sign_up.
+    # If confirmation was very fast the trigger may not have run yet — retry once.
+    raw_profile = None
+    for attempt in range(2):
+        try:
+            raw_profile = db.profiles.get(res.user.id)
+            break
+        except Exception:
+            if attempt == 0:
+                import asyncio
+                await asyncio.sleep(0.5)  # give the trigger a moment
+            else:
+                logger.error(f"Profile missing after email confirmation for {res.user.id}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Account confirmed but profile could not be loaded. Please contact support.",
+                )
+
+    profile = _build_user_profile(raw_profile)
+
+    db.activity.log(
+        user_id=res.user.id,
+        action="email_confirmed",
+        metadata={"email": res.user.email},
+    )
+    logger.info(f"Email confirmed: {res.user.email} (id={res.user.id})")
+
+    return LoginResponse(
+        tokens=_build_token_pair(res.session),
+        user=profile,
+    )
+
+
+# Resend Confirmation Email 
+@router.post(
+    "/resend-confirmation",
+    status_code=status.HTTP_200_OK,
+    summary="Resend the email confirmation link",
+)
+async def resend_confirmation(body: PasswordResetRequest):
+    """
+    Resends a confirmation email to the given address if the account exists
+    and is not yet confirmed.
+
+    Use this when:
+    - The original email never arrived (check spam)
+    - The 24-hour link has expired
+
+    Always returns 200 regardless of whether the email exists (prevents enumeration).
+
+    The new link follows the same flow as the original:
+    browser → `{SITE_URL}/auth/confirm?token_hash=...&type=signup` → POST /auth/confirm
+    """
+    supabase = _auth_client()
+
+    try:
+        supabase.auth.resend({
+            "type":  "signup",
+            "email": body.email,
+            "options": {
+                "emailRedirectTo": f"{settings.SITE_URL}/auth/confirm",
+            },
+        })
+    except Exception as e:
+        logger.warning(f"Resend confirmation error for {body.email}: {e}")
+        # Always return 200 — never reveal whether the email exists
+
+    return {
+        "message": (
+            "If an unconfirmed account exists with that email, "
+            "a new confirmation link has been sent."
+        )
+    }
 
 # Login Section
 @router.post(

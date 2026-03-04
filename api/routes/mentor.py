@@ -409,11 +409,11 @@ async def ask_question(
     except HTTPException:
         raise
     except Exception as e:
-        # raise HTTPException(status_code=500, detail=str(e))
-        raise HTTPException(
-            status_code=503,
-            detail="Our AI service is temporarily unavailable. Please try again in a moment."
-        )
+        raise HTTPException(status_code=500, detail=str(e))
+        # raise HTTPException(
+        #     status_code=503,
+        #     detail="Our AI service is temporarily unavailable. Please try again in a moment."
+        # )
 
 
 @router.get("/conversations/{user_id}", response_model=list[ConversationSummaryResponse])
