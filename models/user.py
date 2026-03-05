@@ -11,7 +11,6 @@ from typing import Optional, List
 from datetime import datetime
 from enum import Enum
 
-# Enums 
 
 class ExperienceLevel(str, Enum):
     BEGINNER     = "beginner"
@@ -114,9 +113,9 @@ class LoginResponse(BaseModel):
 
 class LogoutResponse(BaseModel):
     message: str = "Logged out successfully."
+    
 
 # Profile Schemas 
-
 class UserProfile(BaseModel):
     """
     Public-facing user profile.
@@ -128,6 +127,11 @@ class UserProfile(BaseModel):
     avatar_url:       Optional[str]
     preferred_pairs:  List[str]
     timezone:         str
+    
+    mentor_questions_asked: int = Field(default=0)
+    signals_extracted: int = Field(default=0)
+    strategies_generated: int = Field(default=0)
+    backtests_run: int = Field(default=0)
     
     created_at: datetime
     updated_at: datetime
