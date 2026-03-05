@@ -588,7 +588,7 @@ class SignalService:
     All database operations go through db.signals (SignalsRepo).
     """
 
-    def __init__(self, hf_client, model_id: str = "forexgpt/mistral-7b-forex-signals"):
+    def __init__(self, hf_client, model_id: str = "forexgpt/forexgpt-mistral-7b-forex-signals-v1.0"):
         """
         Args:
             hf_client: HuggingFace AsyncInferenceClient
@@ -608,7 +608,7 @@ class SignalService:
             '- confidence (float or null): 0.0-1.0, null if not determinable\n'
             '- reasoning (string): Why this signal exists\n'
             '- magnitude (string or null): "low", "moderate", "high", or null\n'
-            '- time_horizon (string or null): "current_quarter", "long_term", "next_quarter", "full_term", short_term", "full_year" or null\n\n'
+            '- time_horizon (string or null): "current_quarter", "long_term", "next_quarter", "full_term", "short_term", "full_year" or null\n\n'
             'Only extract signals when there is clear forex exposure. Be conservative with confidence scores.'
         )
 
@@ -867,12 +867,37 @@ class SignalService:
         except Exception as e:
             logger.error(f"Error parsing signal response: {e}")
             raise
+ 
+    # def _messages_to_prompt(self, messages: List[Dict]) -> str:
+    #     """
+    #     Convert chat-style messages into a single text prompt for a
+    #     causal LM (AutoModelForCausalLM) that doesn't support chat format.
+
+    #     Format:
+    #         System: ...
+    #         User: ...
+    #         Assistant:
+    #     """
+    #     parts = []
+    #     for msg in messages:
+    #         role = msg["role"].capitalize()
+    #         parts.append(f"{role}: {msg['content']}")
+    #     # Add the assistant prefix so the model continues from here
+    #     parts.append("Assistant:")
+    #     return "\n\n".join(parts)
 
     async def _generate_signal(self, messages: List[Dict]) -> str:
         """
-        Call the HuggingFace model with up to 3 retries on transient errors.
-        Waits 2 seconds between attempts.
+        Call the HuggingFace causal LM model with up to 3 retries.
+        Uses text_generation instead of chat_completion because the
+        fine-tuned model is AutoModelForCausalLM, not a chat model.
+
+        Swap SIGNAL_MODEL_ID in .env to switch between:
+          - Placeholder: mistralai/Mixtral-8x7B-Instruct-v0.1
+          - Fine-tuned:  forexgpt/forexgpt-mistral-7b-forex-signals-v1.0
         """
+        # print(f"DEBUG provider: {self.hf_client.provider}")
+        # prompt = self._messages_to_prompt(messages)
         last_error = None
         for attempt in range(3):
             try:
@@ -884,6 +909,16 @@ class SignalService:
                     top_p=0.9,
                 )
                 return response.choices[0].message.content
+                # response = await self.hf_client.text_generation(
+                #     prompt,
+                #     model=self.model_id,
+                #     max_new_tokens=300,
+                #     temperature=0.1,
+                #     top_p=0.9,
+                #     do_sample=True,
+                #     return_full_text=False,  # only return the generated part
+                # )
+                # return response
             except Exception as e:
                 last_error = e
                 logger.warning(f"_generate_signal attempt {attempt + 1} failed: {e}")
