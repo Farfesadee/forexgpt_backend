@@ -1,194 +1,317 @@
+"""
+services/backtest_service.py
+Backtest pipeline service.
+
+Flow:
+    1. Create a pending backtest row         — db.backtests.create()
+    2. Fetch price data                      — DataFetcher
+    3. Run engine                            — BacktestEngine
+    4. Calculate metrics                     — PerformanceMetrics
+    5. Save results + trades                 — db.backtests.save_results()
+                                               db.backtests.save_trades()
+    6. Increment profile counter             — db.profiles.increment_counter()
+
+The sync_backtest_on_complete DB trigger fires on save_results() and
+automatically denormalizes sharpe_ratio, total_return_pct, max_drawdown_pct,
+win_rate_pct, total_trades into the backtests row for fast list queries.
+
+Error handling:
+    Any failure after create() calls db.backtests.set_status("failed")
+    so the row is never left in "pending" state.
+"""
+
 import logging
-# from core.database import get_supabase
+from typing import Optional, Dict, Any, List
+from datetime import datetime, timezone
+
+from core.database import db
+
+from backtesting.data_fetcher import DataFetcher
+from backtesting.engine.backtest_engine import BacktestEngine
+from backtesting.costs.cost_model import get_cost_model
+from backtesting.metrics.performance_metrics import PerformanceMetrics
 
 logger = logging.getLogger(__name__)
 
-# ─── Cost Model Constants ─────────────────────────────────────
-# Based on typical retail forex broker costs
 
-COST_MODEL = {
-    "normal": {
-        "spread_pips": 2.0,      # 2 pips each side = 4 pips total
-        "slippage_pips": 1.0,    # 1 pip each side = 2 pips total
-    },
-    "volatile": {
-        "spread_pips": 4.0,      # Spreads widen in volatile markets
-        "slippage_pips": 2.0,
-    },
-}
+# ============================================================================
+# STRATEGY BUILDER
+# Returns a callable compatible with BacktestEngine.run_backtest()
+# ============================================================================
 
-COMMISSION_PER_TRADE_USD = 5.0   # $5 per side = $10 round trip
-FINANCING_RATE_PER_DAY = 0.001   # 0.1% per day
+def _build_strategy(strategy: str, params: Dict[str, Any]):
+    """Build a strategy function from name + params."""
+    strategy = strategy.lower().replace(" ", "_")
+
+    if strategy == "rsi":
+        period     = params.get("period", 14)
+        oversold   = params.get("oversold", 30)
+        overbought = params.get("overbought", 70)
+
+        def fn(data):
+            if len(data) < period + 1:
+                return None
+            close = data["close"]
+            delta = close.diff()
+            gain  = delta.where(delta > 0, 0.0).rolling(period).mean()
+            loss  = (-delta.where(delta < 0, 0.0)).rolling(period).mean()
+            rsi   = 100 - (100 / (1 + gain / loss))
+            if rsi.iloc[-1] < oversold  and rsi.iloc[-2] >= oversold:
+                return "buy"
+            if rsi.iloc[-1] > overbought and rsi.iloc[-2] <= overbought:
+                return "sell"
+            return None
+        return fn
+
+    elif strategy == "moving_average_crossover":
+        fast = params.get("fast_period", 50)
+        slow = params.get("slow_period", 200)
+
+        def fn(data):
+            if len(data) < slow:
+                return None
+            close   = data["close"]
+            fast_ma = close.rolling(fast).mean()
+            slow_ma = close.rolling(slow).mean()
+            if fast_ma.iloc[-1] > slow_ma.iloc[-1] and fast_ma.iloc[-2] <= slow_ma.iloc[-2]:
+                return "buy"
+            if fast_ma.iloc[-1] < slow_ma.iloc[-1] and fast_ma.iloc[-2] >= slow_ma.iloc[-2]:
+                return "sell"
+            return None
+        return fn
+
+    elif strategy == "bollinger_bands":
+        period  = params.get("period", 20)
+        std_dev = params.get("std_dev", 2.0)
+
+        def fn(data):
+            if len(data) < period:
+                return None
+            close  = data["close"]
+            middle = close.rolling(period).mean()
+            std    = close.rolling(period).std()
+            upper  = (middle + std_dev * std).iloc[-1]
+            lower  = (middle - std_dev * std).iloc[-1]
+            price  = close.iloc[-1]
+            if price <= lower:
+                return "buy"
+            if price >= upper:
+                return "sell"
+            return None
+        return fn
+
+    elif strategy == "macd":
+        fast   = params.get("fast", 12)
+        slow   = params.get("slow", 26)
+        signal = params.get("signal", 9)
+
+        def fn(data):
+            if len(data) < slow:
+                return None
+            close    = data["close"]
+            ema_fast = close.ewm(span=fast,   adjust=False).mean()
+            ema_slow = close.ewm(span=slow,   adjust=False).mean()
+            macd     = ema_fast - ema_slow
+            sig_line = macd.ewm(span=signal,  adjust=False).mean()
+            if macd.iloc[-1] > sig_line.iloc[-1] and macd.iloc[-2] <= sig_line.iloc[-2]:
+                return "buy"
+            if macd.iloc[-1] < sig_line.iloc[-1] and macd.iloc[-2] >= sig_line.iloc[-2]:
+                return "sell"
+            return None
+        return fn
+
+    else:
+        raise ValueError(
+            f"Unknown strategy '{strategy}'. "
+            f"Supported: rsi, moving_average_crossover, bollinger_bands, macd"
+        )
 
 
-# ─── Core Calculations ───────────────────────────────────────
+# ============================================================================
+# SERVICE
+# ============================================================================
 
-def _price_diff_to_pips(entry: float, exit: float, direction: str) -> float:
-    """Converts price difference to pips. 1 pip = 0.0001 for most pairs."""
-    diff = exit - entry if direction == "LONG" else entry - exit
-    return round(diff / 0.0001, 2)
-
-
-def _pips_to_usd(pips: float, position_size_lots: float) -> float:
-    """1 lot = 100,000 units. 1 pip on 1 lot = $10."""
-    return round(pips * 10 * position_size_lots, 2)
-
-
-def _calculate_commission_pips(
-    entry_price: float,
-    position_size_lots: float,
-) -> float:
-    """Converts $10 round-trip commission into pip equivalent."""
-    position_value_usd = position_size_lots * 100_000 * entry_price
-    commission_total = COMMISSION_PER_TRADE_USD * 2   # entry + exit
-    ratio = commission_total / position_value_usd
-    return round(ratio * 10_000, 4)
-
-
-def _calculate_financing_pips(days_held: int) -> float:
-    """Financing cost in pips based on days held."""
-    return round(FINANCING_RATE_PER_DAY * days_held, 4)
-
-
-# ─── Naive Backtest ───────────────────────────────────────────
-
-def _run_naive(
-    entry_price: float,
-    exit_price: float,
-    direction: str,
-    position_size_lots: float,
-) -> dict:
+class BacktestService:
     """
-    Naive backtest — ignores all trading costs.
-    This is what most basic backtesting tools show.
+    Backtest service — uses db.backtests (BacktestsRepo) from core/database.py.
+    No direct Supabase client needed — all DB access goes through the repo.
     """
-    gross_pips = _price_diff_to_pips(entry_price, exit_price, direction)
-    gross_usd = _pips_to_usd(gross_pips, position_size_lots)
 
-    return {
-        "gross_profit_pips": gross_pips,
-        "gross_profit_usd": gross_usd,
-        "net_profit_pips": gross_pips,
-        "net_profit_usd": gross_usd,
-        "cost_breakdown": {
-            "spread_pips": 0.0,
-            "slippage_pips": 0.0,
-            "commission_pips": 0.0,
-            "financing_pips": 0.0,
-            "total_cost_pips": 0.0,
-        },
-        "cost_impact_percent": 0.0,
-        "win": gross_pips > 0,
-    }
+    # -------------------------------------------------------------------------
+    # RUN
+    # -------------------------------------------------------------------------
 
+    async def run_backtest(
+        self,
+        user_id:           str,
+        strategy_id:       Optional[str],
+        pair:              str,
+        start_date:        str,
+        end_date:          str,
+        timeframe:         str = "1d",
+        initial_capital:   float = 10000.0,
+        strategy_name:     str = "rsi",
+        strategy_params:   Optional[Dict[str, Any]] = None,
+        cost_preset:       str = "forex_retail",
+        position_size_pct: float = 0.1,
+        data_source:       str = "auto",
+    ) -> Dict[str, Any]:
+        """
+        Full backtest pipeline.
 
-# ─── Realistic Backtest ───────────────────────────────────────
+        Args:
+            user_id:           Supabase auth user UUID
+            strategy_id:       Optional FK to strategies table
+            pair:              Currency pair e.g. "EURUSD"
+            start_date:        "YYYY-MM-DD"
+            end_date:          "YYYY-MM-DD"
+            timeframe:         "1d" or "1wk"
+            initial_capital:   Starting capital
+            strategy_name:     rsi | moving_average_crossover | bollinger_bands | macd
+            strategy_params:   Strategy-specific parameters
+            cost_preset:       From CostModel presets
+            position_size_pct: Fraction of capital per trade
+            data_source:       auto | yfinance | alphavantage | csv
 
-def _run_realistic(
-    entry_price: float,
-    exit_price: float,
-    direction: str,
-    position_size_lots: float,
-    days_held: int,
-    market_condition: str,
-) -> dict:
-    """
-    Realistic backtest — applies spread, slippage, commission, financing.
-    This is what real trading actually looks like.
-    """
-    gross_pips = _price_diff_to_pips(entry_price, exit_price, direction)
-    gross_usd = _pips_to_usd(gross_pips, position_size_lots)
+        Returns:
+            The completed backtest row dict from Supabase
+        """
+        strategy_params = strategy_params or {}
+        pair            = pair.upper()
 
-    # Cost components
-    costs = COST_MODEL.get(market_condition, COST_MODEL["normal"])
-    spread_pips = costs["spread_pips"] * 2          # Entry + exit
-    slippage_pips = costs["slippage_pips"] * 2      # Entry + exit
-    commission_pips = _calculate_commission_pips(entry_price, position_size_lots)
-    financing_pips = _calculate_financing_pips(days_held)
+        logger.info(f"Backtest: {strategy_name} on {pair} [{start_date} -> {end_date}] user={user_id}")
 
-    total_cost_pips = round(
-        spread_pips + slippage_pips + commission_pips + financing_pips, 4
-    )
+        # ── Step 1: Create pending row ────────────────────────────────────────
+        # This gives us a backtest_id immediately so we can update status
+        # if anything fails downstream
+        record = db.backtests.create(user_id, {
+            "strategy_id":     strategy_id,
+            "pair":            pair,
+            "start_date":      start_date,
+            "end_date":        end_date,
+            "timeframe":       timeframe,
+            "initial_capital": initial_capital,
+            "strategy_name":   strategy_name,
+            "strategy_params": strategy_params,
+            "cost_preset":     cost_preset,
+        })
+        backtest_id = record["id"]
+        logger.info(f"Created pending backtest {backtest_id}")
 
-    net_pips = round(gross_pips - total_cost_pips, 2)
-    net_usd = _pips_to_usd(net_pips, position_size_lots)
-
-    cost_impact_percent = (
-        round((total_cost_pips / abs(gross_pips)) * 100, 2)
-        if gross_pips != 0 else 0.0
-    )
-
-    return {
-        "gross_profit_pips": gross_pips,
-        "gross_profit_usd": gross_usd,
-        "net_profit_pips": net_pips,
-        "net_profit_usd": net_usd,
-        "cost_breakdown": {
-            "spread_pips": spread_pips,
-            "slippage_pips": slippage_pips,
-            "commission_pips": commission_pips,
-            "financing_pips": financing_pips,
-            "total_cost_pips": total_cost_pips,
-        },
-        "cost_impact_percent": cost_impact_percent,
-        "win": net_pips > 0,
-    }
-
-
-# ─── Main Service Function ────────────────────────────────────
-
-async def run_backtest(request: dict, user_id: str | None = None) -> dict:
-    """
-    Runs both naive and realistic backtests and returns a comparison.
-    Saves the result to Supabase if user is authenticated.
-    """
-    naive = _run_naive(
-        entry_price=request["entry_price"],
-        exit_price=request["exit_price"],
-        direction=request["direction"],
-        position_size_lots=request["position_size_lots"],
-    )
-
-    realistic = _run_realistic(
-        entry_price=request["entry_price"],
-        exit_price=request["exit_price"],
-        direction=request["direction"],
-        position_size_lots=request["position_size_lots"],
-        days_held=request["days_held"],
-        market_condition=request.get("market_condition", "normal"),
-    )
-
-    logger.info(
-        f"Backtest complete — naive: {naive['net_profit_usd']} USD, "
-        f"realistic: {realistic['net_profit_usd']} USD, "
-        f"cost impact: {realistic['cost_impact_percent']}%"
-    )
-
-    # Save to Supabase if user is authenticated
-    backtest_id = None
-    if user_id:
         try:
-            db = get_supabase()
-            record = db.table("backtests").insert({
-                "user_id": user_id,
-                "currency_pair": request["currency_pair"],
-                "direction": request["direction"],
-                "entry_price": request["entry_price"],
-                "exit_price": request["exit_price"],
-                "position_size_lots": request["position_size_lots"],
-                "days_held": request["days_held"],
-                "market_condition": request.get("market_condition", "normal"),
-                "naive_profit_usd": naive["net_profit_usd"],
-                "realistic_profit_usd": realistic["net_profit_usd"],
-                "cost_impact_percent": realistic["cost_impact_percent"],
-            }).execute()
-            backtest_id = record.data[0]["id"]
-            logger.info(f"Backtest saved to Supabase with id: {backtest_id}")
-        except Exception as e:
-            logger.warning(f"Could not save backtest to DB: {e}")
+            # ── Step 2: Fetch price data ──────────────────────────────────────
+            fetcher = DataFetcher()
+            df      = fetcher.fetch(pair, start_date, end_date,
+                                    interval=timeframe, source=data_source)
 
-    return {
-        "naive": naive,
-        "realistic": realistic,
-        "backtest_id": backtest_id,
-    }
+            data = df.reset_index()
+            col  = "Date" if "Date" in data.columns else data.columns[0]
+            data = data.rename(columns={col: "date"})
+
+            # ── Step 3: Build strategy + run engine ───────────────────────────
+            strategy_fn = _build_strategy(strategy_name, strategy_params)
+            cost_model  = get_cost_model(cost_preset)
+            engine      = BacktestEngine(
+                initial_capital=initial_capital,
+                cost_model=cost_model,
+                position_size_pct=position_size_pct
+            )
+            raw_results = engine.run_backtest(data, strategy_fn)
+
+            # ── Step 4: Calculate metrics ─────────────────────────────────────
+            metrics = PerformanceMetrics(raw_results).calculate_all_metrics()
+
+            # ── Step 5: Save results + trades ─────────────────────────────────
+            # save_results() triggers sync_backtest_on_complete in the DB
+            # which denormalizes sharpe_ratio, total_return_pct etc.
+            db.backtests.save_results(backtest_id, {
+                "metrics":      metrics,
+                "equity_curve": raw_results.get("equity_curve", []),
+            })
+
+            # Save individual trades to backtest_trades table
+            trades = raw_results.get("trades", [])
+            if trades:
+                db.backtests.save_trades(backtest_id, user_id, trades)
+
+            # ── Step 6: Increment profile counter ────────────────────────────
+            db.profiles.increment_counter(user_id, "backtests")
+
+            logger.info(
+                f"Backtest {backtest_id} completed: "
+                f"{metrics['total_trades']} trades, "
+                f"{metrics['total_return_pct']}% return"
+            )
+
+            # Return the full completed row
+            return db.backtests.get(backtest_id)
+
+        except Exception as e:
+            # Mark as failed so it's never left as "pending"
+            logger.error(f"Backtest {backtest_id} failed: {e}")
+            db.backtests.set_status(backtest_id, "failed", error=str(e))
+            raise
+
+    # -------------------------------------------------------------------------
+    # LIST
+    # -------------------------------------------------------------------------
+
+    async def get_user_backtests(
+        self,
+        user_id: str,
+        pair:    Optional[str] = None,
+        limit:   int = 20
+    ) -> List[Dict]:
+        """List completed backtests for a user, newest first."""
+        return db.backtests.list(user_id, pair=pair, limit=limit)
+
+    # -------------------------------------------------------------------------
+    # GET ONE
+    # -------------------------------------------------------------------------
+
+    async def get_backtest_by_id(
+        self, backtest_id: str, user_id: str
+    ) -> Optional[Dict]:
+        """Get full backtest detail. Returns None if not found or wrong user."""
+        try:
+            record = db.backtests.get(backtest_id)
+            # Verify ownership — repo returns the row regardless of user
+            if record and record.get("user_id") != user_id:
+                return None
+            return record
+        except Exception:
+            return None
+
+    # -------------------------------------------------------------------------
+    # GET TRADES
+    # -------------------------------------------------------------------------
+
+    async def get_backtest_trades(
+        self,
+        backtest_id: str,
+        user_id:     str,
+        limit:       int = 500,
+        offset:      int = 0
+    ) -> List[Dict]:
+        """Get individual trades for a backtest."""
+        # Ownership check first
+        record = await self.get_backtest_by_id(backtest_id, user_id)
+        if record is None:
+            return []
+        return db.backtests.get_trades(backtest_id, limit=limit, offset=offset)
+
+    # -------------------------------------------------------------------------
+    # DELETE
+    # -------------------------------------------------------------------------
+
+    async def delete_backtest(
+        self, backtest_id: str, user_id: str
+    ) -> bool:
+        """Delete a backtest. Returns True if deleted, False if not found."""
+        record = await self.get_backtest_by_id(backtest_id, user_id)
+        if record is None:
+            return False
+        # BacktestsRepo doesn't have a delete method — add direct call
+        from core.database import get_db
+        get_db().table("backtests").delete().eq("id", backtest_id).execute()
+        return True
