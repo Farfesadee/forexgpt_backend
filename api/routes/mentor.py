@@ -440,7 +440,7 @@ async def get_conversation(
 ):
     try:
         _assert_user_access(user_id, user)
-        history = await service.get_conversation_history(conversation_id, user_id)
+        history = service.get_conversation_history(conversation_id, user_id)
         if history is None:
             raise HTTPException(status_code=404, detail="Conversation not found")
         return {
@@ -462,7 +462,7 @@ async def delete_conversation(
 ):
     try:
         _assert_user_access(user_id, user)
-        deleted = await service.delete_conversation(conversation_id, user_id)
+        deleted = service.delete_conversation(conversation_id, user_id)
         if not deleted:
             raise HTTPException(status_code=404, detail="Conversation not found")
         return {"message": "Conversation deleted successfully", "conversation_id": conversation_id}

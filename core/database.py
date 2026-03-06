@@ -98,7 +98,7 @@ class MentorRepo:
         mentor_service.py passes these as the messages[] array to the LLM.
         """
         return (
-            self._msg.select("role, content, created_at, topic_tags, follow_up_questions, thumbs_up")
+            self._msg.select("role, content, created_at, topic_tags, thumbs_up")    # follow_up_questions,
             .eq("conversation_id", conversation_id)
             .order("created_at")
             .limit(limit)
