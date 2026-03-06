@@ -54,9 +54,15 @@ def get_codegen_service() -> CodeGenService:
     )
 
 
+# def get_signal_service() -> SignalService:
+#     return SignalService(
+#         hf_client=hf_client,
+#         model_id=settings.SIGNAL_MODEL_ID,
+#     )
+
 def get_signal_service() -> SignalService:
     return SignalService(
-        hf_client=hf_client,
+        mistral_client=mistral_client,
         model_id=settings.SIGNAL_MODEL_ID,
     )
 

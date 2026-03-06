@@ -424,7 +424,7 @@ async def list_conversations(
 ):
     try:
         _assert_user_access(user_id, user)
-        conversations = await service.list_user_conversations(user_id, limit)
+        conversations = service.list_user_conversations(user_id, limit)
         return conversations
     except HTTPException:
         raise

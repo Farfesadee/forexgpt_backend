@@ -19,7 +19,8 @@ Error handling:
     Any failure after create() calls db.backtests.set_status("failed")
     so the row is never left in "pending" state.
 """
-
+import json
+import numpy as np
 import logging
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
@@ -38,6 +39,22 @@ logger = logging.getLogger(__name__)
 # STRATEGY BUILDER
 # Returns a callable compatible with BacktestEngine.run_backtest()
 # ============================================================================
+
+def _make_serializable(obj):
+    """Convert pandas/numpy types to JSON-serializable Python types."""
+    if isinstance(obj, dict):
+        return {k: _make_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_make_serializable(i) for i in obj]
+    elif hasattr(obj, 'isoformat'):  # datetime, Timestamp
+        return obj.isoformat()
+    elif isinstance(obj, (np.integer,)):
+        return int(obj)
+    elif isinstance(obj, (np.floating,)):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    return obj
 
 def _build_strategy(strategy: str, params: Dict[str, Any]):
     """Build a strategy function from name + params."""
@@ -184,6 +201,7 @@ class BacktestService:
         # ── Step 1: Create pending row ────────────────────────────────────────
         # This gives us a backtest_id immediately so we can update status
         # if anything fails downstream
+        # REPLACE WITH:
         record = db.backtests.create(user_id, {
             "strategy_id":     strategy_id,
             "pair":            pair,
@@ -192,8 +210,12 @@ class BacktestService:
             "timeframe":       timeframe,
             "initial_capital": initial_capital,
             "strategy_name":   strategy_name,
-            "strategy_params": strategy_params,
-            "cost_preset":     cost_preset,
+            "strategy_config": {
+                "strategy_params":   strategy_params,
+                "cost_preset":       cost_preset,
+                "position_size_pct": position_size_pct,
+                "data_source":       data_source
+            }
         })
         backtest_id = record["id"]
         logger.info(f"Created pending backtest {backtest_id}")
@@ -225,18 +247,21 @@ class BacktestService:
             # save_results() triggers sync_backtest_on_complete in the DB
             # which denormalizes sharpe_ratio, total_return_pct etc.
             db.backtests.save_results(backtest_id, {
-                "metrics":      metrics,
-                "equity_curve": raw_results.get("equity_curve", []),
+                "metrics":      _make_serializable(metrics),
+                "equity_curve": _make_serializable(raw_results.get("equity_curve", [])),
             })
 
             # Save individual trades to backtest_trades table
             trades = raw_results.get("trades", [])
             if trades:
-                db.backtests.save_trades(backtest_id, user_id, trades)
+                db.backtests.save_trades(backtest_id, user_id, _make_serializable(trades))
 
-            # ── Step 6: Increment profile counter ────────────────────────────
-            db.profiles.increment_counter(user_id, "backtests")
-
+            # ── Step 6: Increment profile counter ───────────────────────────
+            try:
+                db.profiles.increment_counter(user_id, "backtests")
+            except Exception as e:
+                logger.warning(f"Could not increment profile counter: {e}")
+                # Non-critical — don't fail the backtest over this
             logger.info(
                 f"Backtest {backtest_id} completed: "
                 f"{metrics['total_trades']} trades, "

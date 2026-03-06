@@ -587,14 +587,20 @@ class SignalService:
     Uses the fine-tuned ForexGPT model hosted on HuggingFace.
     All database operations go through db.signals (SignalsRepo).
     """
-
-    def __init__(self, hf_client, model_id: str = "forexgpt/forexgpt-mistral-7b-forex-signals-v1.0"):
+    # def __init__(self, hf_client, model_id: str = "forexgpt/forexgpt-mistral-7b-forex-signals-v1.0"):
+    #     """
+    #     Args:
+    #         hf_client: HuggingFace AsyncInferenceClient
+    #         model_id:  HuggingFace model ID for the fine-tuned signal model
+    #     """
+    def __init__(self, mistral_client, model_id: str = "mistral-small-latest"):
         """
         Args:
-            hf_client: HuggingFace AsyncInferenceClient
-            model_id:  HuggingFace model ID for the fine-tuned signal model
+            mistral_client: Mistral async client instance
+            model_id:       Mistral model ID (swap for HuggingFace model when ready)
         """
-        self.hf_client = hf_client
+        # self.hf_client = hf_client
+        self.mistral_client = mistral_client
         self.model_id  = model_id
 
         self.system_prompt = (
@@ -644,16 +650,18 @@ class SignalService:
             if save_to_db and signal_data["signal"]:
                 excerpt = transcript[:500] + "..." if len(transcript) > 500 else transcript
                 saved = db.signals.create(user_id, {
-                    "currency_pair":      signal_data.get("currency_pair"),
-                    "direction":          signal_data.get("direction"),
+                    "currency_pair":      [signal_data.get("currency_pair")] if signal_data.get("currency_pair") else None, #signal_data.get("currency_pair"),
+                    "direction":          signal_data.get("direction").lower() if signal_data.get("direction") else None, # signal_data.get("direction"),
                     "confidence":         signal_data.get("confidence"),
                     "reasoning":          signal_data["reasoning"],
                     "magnitude":          signal_data.get("magnitude"),
                     "time_horizon":       signal_data.get("time_horizon"),
                     "company_name":       company_name,
                     "transcript_excerpt": excerpt,
+                    "extraction_result":  signal_data,
                 })
                 signal_data["signal_id"] = saved["id"]
+                signal_data["timestamp"] = saved.get("created_at")
 
             logger.info(f"Signal extraction complete — signal={signal_data['signal']}")
             return signal_data
@@ -892,18 +900,26 @@ class SignalService:
         Uses text_generation instead of chat_completion because the
         fine-tuned model is AutoModelForCausalLM, not a chat model.
 
-        Swap SIGNAL_MODEL_ID in .env to switch between:
-          - Placeholder: mistralai/Mixtral-8x7B-Instruct-v0.1
-          - Fine-tuned:  forexgpt/forexgpt-mistral-7b-forex-signals-v1.0
+        Call Mistral API with up to 3 retries.
+        Placeholder until fine-tuned model has a dedicated HuggingFace
+        Inference Endpoint. Swap mistral_client for hf_client when ready.
         """
         # print(f"DEBUG provider: {self.hf_client.provider}")
         # prompt = self._messages_to_prompt(messages)
         last_error = None
         for attempt in range(3):
             try:
-                response = await self.hf_client.chat_completion(
-                    messages=messages,
+                # response = await self.hf_client.chat_completion(
+                #     messages=messages,
+                #     model=self.model_id,
+                #     max_tokens=300,
+                #     temperature=0.1,
+                #     top_p=0.9,
+                # )
+                # return response.choices[0].message.content
+                response = await self.mistral_client.chat.complete_async(
                     model=self.model_id,
+                    messages=messages,
                     max_tokens=300,
                     temperature=0.1,
                     top_p=0.9,
