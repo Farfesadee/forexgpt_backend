@@ -70,11 +70,11 @@ async def extract_signal(
     except HTTPException:
         raise
     except Exception as e:
-        # raise HTTPException(status_code=500, detail=str(e))
-         raise HTTPException(
-            status_code=503,
-            detail="Our AI service is temporarily unavailable. Please try again in a moment."
-        )
+        raise HTTPException(status_code=500, detail=str(e))
+        # raise HTTPException(
+        #     status_code=503,
+        #     detail="Our AI service is temporarily unavailable. Please try again in a moment."
+        # )
 
 
 @router.post("/batch", response_model=BatchSignalResponse)

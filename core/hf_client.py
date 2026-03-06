@@ -8,7 +8,7 @@ def get_mistral_client() -> Mistral:
 
 # HuggingFace client - for fine-tuned signal model
 def get_hf_client() -> AsyncInferenceClient:
-    return AsyncInferenceClient(token=settings.HUGGING_FACE_TOKEN)
+    return AsyncInferenceClient(token=settings.HUGGING_FACE_TOKEN, provider="hf-inference")
 
 mistral_client = get_mistral_client()
 hf_client = get_hf_client()
