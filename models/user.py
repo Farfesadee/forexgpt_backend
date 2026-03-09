@@ -89,7 +89,7 @@ class EmailConfirmRequest(BaseModel):
     
 class OAuthCallbackRequest(BaseModel):
     """For Google / GitHub OAuth — frontend sends the code from the OAuth redirect."""
-    provider: str = Field(..., pattern="^(google|github)$")
+    provider: Optional[str] = Field(default=None, pattern="^(google|github)$")
     code:     str
 
 #  Auth Response Schemas 
@@ -205,5 +205,5 @@ class JWTPayload(BaseModel):
     def user_id(self) -> str:
         return self.sub
 
-# Rebuild model with forward ref resolved
+# Rebuild model with forward ref 
 LoginResponse.model_rebuild()

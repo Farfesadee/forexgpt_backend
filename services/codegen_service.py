@@ -498,6 +498,26 @@ from core.database import get_db
 logger = logging.getLogger(__name__)
 
 
+def _normalize_timestamp(value) -> str:
+    """
+    Normalize DB timestamp values to ISO format (includes year).
+    Keeps original value only when it cannot be parsed.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return ""
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00")).isoformat()
+        except ValueError:
+            return raw
+    return str(value)
+
+
 class CodeGenService:
     """
     Code generation service with conversational debugging support.
@@ -610,7 +630,7 @@ class CodeGenService:
                     "id":          r["id"],
                     "conversation_id": r.get("conversation_id"),
                     "description": (r.get("description") or "")[:100],
-                    "created_at":  r.get("created_at"),
+                    "created_at":  _normalize_timestamp(r.get("created_at")),
                 }
                 for r in rows
             ]
@@ -637,7 +657,7 @@ class CodeGenService:
                 "code":            row.get("code"),
                 "description":     row.get("description"),
                 "conversation_id": row.get("conversation_id"),
-                "created_at":      row.get("created_at"),
+                "created_at":      _normalize_timestamp(row.get("created_at")),
             }
         except Exception as e:
             logger.error(f"Error retrieving generated code: {e}", exc_info=True)
@@ -655,7 +675,7 @@ class CodeGenService:
                 {
                     "role":      m["role"],
                     "content":   m["content"],
-                    "timestamp": m.get("timestamp", ""),
+                    "timestamp": _normalize_timestamp(m.get("timestamp")),
                 }
                 for m in history
             ]
@@ -711,7 +731,7 @@ class CodeGenService:
                 {
                     "role":      m["role"],
                     "content":   m["content"],
-                    "timestamp": m.get("created_at", ""),
+                    "timestamp": _normalize_timestamp(m.get("created_at")),
                 }
                 for m in result.data
             ]
