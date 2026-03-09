@@ -481,6 +481,8 @@ async def oauth_callback(provider: str, body: OAuthCallbackRequest):
     """
     if provider not in ("google", "github"):
         raise HTTPException(status_code=400, detail="Unsupported OAuth provider.")
+    if body.provider and body.provider != provider:
+        raise HTTPException(status_code=400, detail="OAuth provider mismatch between path and body.")
 
     supabase = _auth_client()
 
@@ -650,6 +652,29 @@ def _handle_supabase_auth_error(exc: Exception, context: str) -> None:
         raise HTTPException(status_code=429, detail="Too many attempts. Please wait and try again.")
     if "token" in err_str and ("invalid" in err_str or "expired" in err_str):
         raise HTTPException(status_code=401, detail="Session token is invalid or expired. Please log in again.")
+    if "provider is not enabled" in err_str or "oauth provider not enabled" in err_str:
+        raise HTTPException(
+            status_code=400,
+            detail="Google OAuth is not enabled in Supabase Auth settings.",
+        )
+    if "invalid grant" in err_str or "invalid authorization code" in err_str or "code_verifier" in err_str:
+        raise HTTPException(
+            status_code=401,
+            detail="OAuth code is invalid or expired. Start Google login again.",
+        )
+    if "redirect" in err_str and "mismatch" in err_str:
+        raise HTTPException(
+            status_code=400,
+            detail="OAuth redirect URL mismatch. Check Supabase Auth URL configuration.",
+        )
+    if "error sending confirmation email" in err_str or "smtp" in err_str:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Registration could not send the confirmation email. "
+                "Check Supabase Auth email provider/SMTP settings and allowed redirect URLs."
+            ),
+        )
 
     # Fallback — don't expose raw Supabase errors
     raise HTTPException(status_code=500, detail=f"Authentication service error during {context}.")
