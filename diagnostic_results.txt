@@ -1,0 +1,7 @@
+Attempting to register test user: test_verify_unique_123@example.com
+
+Caught Exception during sign_up:
+Error type: AuthApiError
+Error message: Error sending confirmation email
+
+DIAGNOSIS: Unknown registration error. Check Supabase Dashboard for logs.

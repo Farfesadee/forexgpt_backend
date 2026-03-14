@@ -1,0 +1,14 @@
+id
+user_id
+company_name
+transcript_excerpt
+extraction_result
+direction
+magnitude
+currency_pair
+confidence
+reasoning
+time_horizon
+user_notes
+created_at
+updated_at

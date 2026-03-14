@@ -1,0 +1,13 @@
+OK: id
+OK: user_id
+FAIL: source_label - {'message': 'column signals.source_label does not 
+FAIL: base_currency - {'message': 'column signals.base_currency does not
+FAIL: primary_sentiment - {'message': 'column signals.primary_sentiment does
+FAIL: primary_direction - {'message': 'column signals.primary_direction does
+FAIL: primary_strength - {'message': 'column signals.primary_strength does 
+FAIL: affected_pairs - {'message': 'column signals.affected_pairs does no
+OK: confidence
+FAIL: hf_endpoint_id - {'message': 'column signals.hf_endpoint_id does no
+FAIL: hf_model_version - {'message': 'column signals.hf_model_version does 
+FAIL: is_saved - {'message': 'column signals.is_saved does not exis
+OK: created_at
