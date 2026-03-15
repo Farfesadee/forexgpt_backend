@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     SUPABASE_SERVICE_ROLE_KEY: str
     SUPABASE_JWT_SECRET: str = Field(validation_alias=AliasChoices("SUPABASE_JWT_SECRET", "JWT_SECRET"))
     
+    SITE_URL: str = "http://localhost:3000"
+    
 
     # Model IDs
     MISTRAL_MODEL_ID: str = "mistral-small-latest"

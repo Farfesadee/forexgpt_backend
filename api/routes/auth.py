@@ -284,6 +284,7 @@ async def resend_confirmation(body: PasswordResetRequest):
         )
     }
 
+
 # Login Section
 @router.post(
     "/login",
@@ -642,6 +643,11 @@ def _handle_supabase_auth_error(exc: Exception, context: str) -> None:
         raise HTTPException(status_code=401, detail="Invalid email or password.")
     if "email not confirmed" in err_str:
         raise HTTPException(status_code=401, detail="Please confirm your email before logging in.")
+    if "confirmation email" in err_str or "send" in err_str and "email" in err_str:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="The authentication server failed to send a verification email. Please check your Supabase SMTP settings."
+        )
     if "user already registered" in err_str or "already been registered" in err_str:
         raise HTTPException(status_code=409, detail="An account with this email already exists.")
     if "password" in err_str and "weak" in err_str:
@@ -650,6 +656,29 @@ def _handle_supabase_auth_error(exc: Exception, context: str) -> None:
         raise HTTPException(status_code=429, detail="Too many attempts. Please wait and try again.")
     if "token" in err_str and ("invalid" in err_str or "expired" in err_str):
         raise HTTPException(status_code=401, detail="Session token is invalid or expired. Please log in again.")
+    if "provider is not enabled" in err_str or "oauth provider not enabled" in err_str:
+        raise HTTPException(
+            status_code=400,
+            detail="Google OAuth is not enabled in Supabase Auth settings.",
+        )
+    if "invalid grant" in err_str or "invalid authorization code" in err_str or "code_verifier" in err_str:
+        raise HTTPException(
+            status_code=401,
+            detail="OAuth code is invalid or expired. Start Google login again.",
+        )
+    if "redirect" in err_str and "mismatch" in err_str:
+        raise HTTPException(
+            status_code=400,
+            detail="OAuth redirect URL mismatch. Check Supabase Auth URL configuration.",
+        )
+    if "error sending confirmation email" in err_str or "smtp" in err_str:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Registration could not send the confirmation email. "
+                "Check Supabase Auth email provider/SMTP settings and allowed redirect URLs."
+            ),
+        )
 
     # Fallback — don't expose raw Supabase errors
     raise HTTPException(status_code=500, detail=f"Authentication service error during {context}.")
