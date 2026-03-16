@@ -482,7 +482,7 @@ class MentorService:
             logger.error(f"Error in ask_question: {e}", exc_info=True)
             raise
 
-    def list_user_conversations(self, user_id: str, limit: int = 20) -> List[Dict]:
+    async def list_user_conversations(self, user_id: str, limit: int = 20) -> List[Dict]:
         """
         List all conversations for a user (most recent first).
         Uses the mentor_history VIEW via MentorRepo.list_conversations.
@@ -494,9 +494,9 @@ class MentorService:
             rows = db.mentor.list_conversations(user_id=user_id, limit=limit)
             return [
                 {
-                    "conversation_id": r.get("conversation_id") or r.get("id"),
+                    "conversation_id": r.get("id"),
                     "started_at":      _normalize_timestamp(r.get("created_at")),
-                    "preview":         r.get("preview", ""),
+                    "preview":         r.get("last_response_preview", ""),
                     "message_count":   r.get("message_count", 0),
                 }
                 for r in rows
@@ -505,7 +505,7 @@ class MentorService:
             logger.error(f"Error listing conversations: {e}", exc_info=True)
             raise
 
-    def get_conversation_history(
+    async def get_conversation_history(
         self, conversation_id: str, user_id: str
     ) -> Optional[List[Dict]]:
         """
@@ -583,6 +583,8 @@ class MentorService:
 
         return [
             {
+                "id":        m.get("id"),
+                "user_id":   m.get("user_id"),
                 "role":      m["role"],
                 "content":   m["content"],
                 "timestamp": _normalize_timestamp(m.get("created_at")),

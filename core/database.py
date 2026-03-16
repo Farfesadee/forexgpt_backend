@@ -75,7 +75,14 @@ class MentorRepo:
 
     # Conversations
     def list_conversations(self, user_id: str, include_archived: bool = False, limit: int = 30) -> List[dict]:
-        q = get_db().table("mentor_history").select("*").eq("user_id", user_id)
+        q = (
+            get_db().table("mentor_history")
+            .select(
+                "id, user_id, title, message_count, is_archived, last_message_at, "
+                "created_at, last_response_preview, last_model_used"
+            )
+            .eq("user_id", user_id)
+        )
         if not include_archived:
             q = q.eq("is_archived", False)
         return q.limit(limit).execute().data
@@ -98,7 +105,10 @@ class MentorRepo:
         mentor_service.py passes these as the messages[] array to the LLM.
         """
         return (
-            self._msg.select("role, content, created_at, topic_tags, follow_up_questions, thumbs_up")
+            self._msg.select(
+                "id, user_id, role, content, created_at, topic_tags, related_concepts, tokens_used, "
+                "model_used, adapter_used, latency_ms, system_prompt_key, thumbs_up"
+            )
             .eq("conversation_id", conversation_id)
             .order("created_at")
             .limit(limit)
