@@ -482,6 +482,8 @@ async def oauth_callback(provider: str, body: OAuthCallbackRequest):
     """
     if provider not in ("google", "github"):
         raise HTTPException(status_code=400, detail="Unsupported OAuth provider.")
+    if body.provider and body.provider != provider:
+        raise HTTPException(status_code=400, detail="OAuth provider mismatch between path and body.")
 
     supabase = _auth_client()
 

@@ -15,8 +15,6 @@ class Settings(BaseSettings):
     SUPABASE_JWT_SECRET: str = Field(validation_alias=AliasChoices("SUPABASE_JWT_SECRET", "JWT_SECRET"))
     
     SITE_URL: str = "http://localhost:3000"
-    
-
     # Model IDs
     MISTRAL_MODEL_ID: str = "mistral-small-latest"
     SIGNAL_MODEL_ID: str = "forexgpt/forexgpt-mistral-7b-forex-signals-v1.0"

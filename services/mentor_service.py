@@ -373,6 +373,26 @@ from core.database import db
 logger = logging.getLogger(__name__)
 
 
+def _normalize_timestamp(value) -> str:
+    """
+    Normalize DB timestamp values to ISO format (includes year).
+    Keeps original value only when it cannot be parsed.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return ""
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00")).isoformat()
+        except ValueError:
+            return raw
+    return str(value)
+
+
 class MentorService:
     """
     Educational mentor service for forex and quantitative finance questions.
@@ -475,7 +495,7 @@ class MentorService:
             return [
                 {
                     "conversation_id": r.get("conversation_id") or r.get("id"),
-                    "started_at":      r.get("created_at"),
+                    "started_at":      _normalize_timestamp(r.get("created_at")),
                     "preview":         r.get("preview", ""),
                     "message_count":   r.get("message_count", 0),
                 }
@@ -501,7 +521,7 @@ class MentorService:
                 {
                     "role":      msg["role"],
                     "content":   msg["content"],
-                    "timestamp": msg.get("timestamp", ""),
+                    "timestamp": _normalize_timestamp(msg.get("timestamp")),
                 }
                 for msg in history
             ]
@@ -565,7 +585,7 @@ class MentorService:
             {
                 "role":      m["role"],
                 "content":   m["content"],
-                "timestamp": m.get("created_at", ""),
+                "timestamp": _normalize_timestamp(m.get("created_at")),
             }
             for m in messages
         ]

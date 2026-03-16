@@ -498,6 +498,26 @@ from core.database import get_db
 logger = logging.getLogger(__name__)
 
 
+def _normalize_timestamp(value) -> str:
+    """
+    Normalize DB timestamp values to ISO format (includes year).
+    Keeps original value only when it cannot be parsed.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return ""
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00")).isoformat()
+        except ValueError:
+            return raw
+    return str(value)
+
+
 class CodeGenService:
     """
     Code generation service with conversational debugging support.
@@ -611,31 +631,16 @@ class CodeGenService:
                 .order("created_at", desc=True)
                 .execute()
             )
-            
-            seen_convs = set()
-            grouped = []
-            for r in (result.data or []):
-                conv_id = r["conversation_id"]
-                if conv_id not in seen_convs:
-                    seen_convs.add(conv_id)
-                    # Get additional details from generated_codes for this conv
-                    code_res = (
-                        get_db().table("generated_codes")
-                        .select("description")
-                        .eq("conversation_id", conv_id)
-                        .limit(1)
-                        .execute()
-                    )
-                    desc = code_res.data[0]["description"] if code_res.data else r["content"][:100]
-                    
-                    grouped.append({
-                        "id":              conv_id, # Use conversation_id as primary ID for consistent routing
-                        "conversation_id": conv_id,
-                        "description":     desc,
-                        "created_at":      r["created_at"],
-                    })
-            
-            return grouped[:limit]
+            rows = result.data or []
+            return [
+                {
+                    "id":          r["id"],
+                    "conversation_id": r.get("conversation_id"),
+                    "description": (r.get("description") or "")[:100],
+                    "created_at":  _normalize_timestamp(r.get("created_at")),
+                }
+                for r in rows
+            ]
         except Exception as e:
             logger.error(f"Error listing logic sessions: {e}", exc_info=True)
             raise
@@ -659,7 +664,7 @@ class CodeGenService:
                 "code":            row.get("code"),
                 "description":     row.get("description"),
                 "conversation_id": row.get("conversation_id"),
-                "created_at":      row.get("created_at"),
+                "created_at":      _normalize_timestamp(row.get("created_at")),
             }
         except Exception as e:
             logger.error(f"Error retrieving generated code: {e}", exc_info=True)
@@ -690,7 +695,7 @@ class CodeGenService:
                 msg = {
                     "role":      m["role"],
                     "content":   m["content"],
-                    "timestamp": m.get("timestamp", ""),
+                    "timestamp": _normalize_timestamp(m.get("timestamp")),
                 }
                 if m["role"] == "assistant" and code_idx < len(codes):
                     msg["code"] = codes[code_idx]["code"]
@@ -795,7 +800,7 @@ class CodeGenService:
                 {
                     "role":      m["role"],
                     "content":   m["content"],
-                    "timestamp": m.get("created_at", ""),
+                    "timestamp": _normalize_timestamp(m.get("created_at")),
                 }
                 for m in result.data
             ]
