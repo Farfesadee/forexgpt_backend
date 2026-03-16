@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     SITE_URL: str = "http://localhost:3000"
     # Model IDs
     MISTRAL_MODEL_ID: str = "mistral-small-latest"
-    SIGNAL_MODEL_ID: str = "forexgpt/mistral-7b-forex-signals"
+    SIGNAL_MODEL_ID: str = "forexgpt/forexgpt-mistral-7b-forex-signals-v1.0"
 
     class Config:
         env_file = ".env"

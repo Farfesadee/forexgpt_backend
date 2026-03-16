@@ -35,7 +35,7 @@ class RegisterRequest(BaseModel):
     model_config = {"json_schema_extra": {"example": {
         "email": "trader@gmail.com",
         "password": "SecurePass1",
-        "display_name": "Alex Trader",
+        "display_name": "ForexGPT Trader",
     }}}
 
 class LoginRequest(BaseModel):
@@ -146,7 +146,7 @@ class ProfileUpdateRequest(BaseModel):
     timezone:         Optional[str] = Field(None, max_length=60)
 
     model_config = {"json_schema_extra": {"example": {
-        "display_name": "Alex Trader",
+        "display_name": "ForexGPT Trader",
         "experience_level": "intermediate",
         "preferred_pairs": ["EUR/USD", "USD/JPY", "GBP/USD"],
         "timezone": "America/New_York",

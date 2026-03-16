@@ -157,7 +157,8 @@ class DataFetcher:
             end=end,
             interval=interval,
             progress=False,
-            auto_adjust=True
+            auto_adjust=True,
+            group_by='ticker'
         )
 
         if df.empty:
@@ -169,7 +170,16 @@ class DataFetcher:
         # yfinance returns MultiIndex columns: ('Close', 'EURUSD=X')
         # Flatten to just the field name in lowercase: 'close'
         if isinstance(df.columns, __import__('pandas').MultiIndex):
-            df.columns = [col[0].lower() for col in df.columns]
+            # yfinance column order differs by version:
+            # newer: (ticker, field) e.g. ('EURUSD=X', 'Close')
+            # older: (field, ticker) e.g. ('Close', 'EURUSD=X')
+            # Detect by checking if first element looks like a field name
+            fields = {'open','high','low','close','volume','adj close'}
+            sample = df.columns[0][0].lower()
+            if sample in fields:
+                df.columns = [col[0].lower() for col in df.columns]
+            else:
+                df.columns = [col[1].lower() for col in df.columns]
         else:
             df.columns = [c.lower() for c in df.columns]
 
@@ -305,7 +315,11 @@ class DataFetcher:
             )
 
         logger.info(f"CSV: loading {csv_path}")
-        df = pd.read_csv(csv_path, parse_dates=["date"], index_col="date")
+        df = pd.read_csv(csv_path)
+        date_col = "Date" if "Date" in df.columns else "date"
+        df[date_col] = pd.to_datetime(df[date_col])
+        df = df.set_index(date_col)
+        df.index.name = "date"
         df.columns = [c.lower() for c in df.columns]
 
         # Filter by date range

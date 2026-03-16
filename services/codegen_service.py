@@ -615,13 +615,20 @@ class CodeGenService:
 
     async def list_generated_codes(self, user_id: str, limit: int = 20) -> List[Dict]:
         """List all generated strategy codes for a user (most recent first)."""
+        return await self.list_user_conversations(user_id, limit)
+
+    async def list_user_conversations(self, user_id: str, limit: int = 20) -> List[Dict]:
+        """
+        List unique logic sessions for a user (most recent first).
+        Groups by conversation_id.
+        """
         try:
+            # First, get the unique conversation IDs and their latest message
             result = (
-                get_db().table("generated_codes")
-                .select("id, conversation_id, description, created_at")
+                get_db().table("codegen_conversations")
+                .select("conversation_id, content, created_at")
                 .eq("user_id", user_id)
                 .order("created_at", desc=True)
-                .limit(limit)
                 .execute()
             )
             rows = result.data or []
@@ -635,7 +642,7 @@ class CodeGenService:
                 for r in rows
             ]
         except Exception as e:
-            logger.error(f"Error listing generated codes: {e}", exc_info=True)
+            logger.error(f"Error listing logic sessions: {e}", exc_info=True)
             raise
 
     async def get_generated_code(self, code_id: str, user_id: str) -> Optional[Dict]:
@@ -671,16 +678,78 @@ class CodeGenService:
             history = self._load_history(conversation_id, user_id)
             if history is None:
                 return None
-            return [
-                {
+            
+            # Fetch codes for this conversation to attach to assistant messages
+            codes_res = (
+                get_db().table("generated_codes")
+                .select("code, created_at")
+                .eq("conversation_id", conversation_id)
+                .order("created_at")
+                .execute()
+            )
+            codes = codes_res.data or []
+            
+            result = []
+            code_idx = 0
+            for m in history:
+                msg = {
                     "role":      m["role"],
                     "content":   m["content"],
                     "timestamp": _normalize_timestamp(m.get("timestamp")),
                 }
-                for m in history
-            ]
+                if m["role"] == "assistant" and code_idx < len(codes):
+                    msg["code"] = codes[code_idx]["code"]
+                    code_idx += 1
+                result.append(msg)
+            
+            return result
         except Exception as e:
             logger.error(f"Error retrieving conversation history: {e}", exc_info=True)
+            raise
+
+    async def delete_conversation(self, conversation_id: str, user_id: str) -> bool:
+        """Delete a logic session and all associated history."""
+        try:
+            # 1. Verify ownership (check messages)
+            result = (
+                get_db().table("codegen_conversations")
+                .select("id")
+                .eq("conversation_id", conversation_id)
+                .eq("user_id", user_id)
+                .limit(1)
+                .execute()
+            )
+            
+            if not result.data:
+                logger.warning(f"Conversation {conversation_id} not found or unauthorized for delete")
+                return False
+                
+            # 2. Delete the conversation history
+            get_db().table("codegen_conversations").delete().eq("conversation_id", conversation_id).eq("user_id", user_id).execute()
+            
+            # 3. Delete associated generated codes
+            get_db().table("generated_codes").delete().eq("conversation_id", conversation_id).eq("user_id", user_id).execute()
+            
+            logger.info(f"Successfully deleted conversation {conversation_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting logic session: {e}", exc_info=True)
+            raise
+
+    async def delete_generated_code(self, code_id: str, user_id: str) -> bool:
+        """Compatibility method - Deletes by code_id but actually clears the whole conversation."""
+        try:
+            result = (
+                get_db().table("generated_codes")
+                .select("conversation_id")
+                .eq("id", code_id)
+                .eq("user_id", user_id)
+                .execute()
+            )
+            if not result.data: return False
+            return await self.delete_conversation(result.data[0]["conversation_id"], user_id)
+        except Exception as e:
+            logger.error(f"Error in delete_generated_code proxy: {e}", exc_info=True)
             raise
 
     # =========================================================================
