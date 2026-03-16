@@ -79,7 +79,14 @@ class MentorRepo:
 
     # Conversations
     def list_conversations(self, user_id: str, include_archived: bool = False, limit: int = 30) -> List[dict]:
-        q = get_db().table("mentor_history").select("*").eq("user_id", user_id)
+        q = (
+            get_db().table("mentor_history")
+            .select(
+                "id, user_id, title, message_count, is_archived, last_message_at, "
+                "created_at, last_response_preview, last_model_used"
+            )
+            .eq("user_id", user_id)
+        )
         if not include_archived:
             q = q.eq("is_archived", False)
         return q.limit(limit).execute().data
