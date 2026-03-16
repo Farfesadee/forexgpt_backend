@@ -650,8 +650,8 @@ class SignalService:
             if save_to_db and signal_data["signal"]:
                 excerpt = transcript[:500] + "..." if len(transcript) > 500 else transcript
                 saved = db.signals.create(user_id, {
-                    "currency_pair":      [signal_data.get("currency_pair")] if signal_data.get("currency_pair") else None, #signal_data.get("currency_pair"),
-                    "direction":          signal_data.get("direction").lower() if signal_data.get("direction") else None, # signal_data.get("direction"),
+                    "currency_pair":      signal_data.get("currency_pair"),
+                    "direction":          signal_data.get("direction").lower() if signal_data.get("direction") else None,
                     "confidence":         signal_data.get("confidence"),
                     "reasoning":          signal_data["reasoning"],
                     "magnitude":          signal_data.get("magnitude"),
@@ -668,6 +668,33 @@ class SignalService:
 
         except Exception as e:
             logger.error(f"Error extracting signal: {e}", exc_info=True)
+            raise
+
+    async def save_signal_result(self, user_id: str, signal_data: Dict) -> Dict:
+        """Persist an already extracted signal result to the database."""
+        try:
+            logger.info(f"Saving signal result for user {user_id}")
+            reasoning = signal_data.get("reasoning", "No further analysis available.")
+            excerpt = reasoning[:500] + "..." if len(reasoning) > 500 else reasoning
+            
+            saved = db.signals.create(user_id, {
+                "currency_pair":      signal_data.get("currency_pair"),
+                "direction":          signal_data.get("direction").lower() if signal_data.get("direction") else None,
+                "confidence":         signal_data.get("confidence"),
+                "reasoning":          reasoning,
+                "magnitude":          signal_data.get("magnitude"),
+                "time_horizon":       signal_data.get("time_horizon"),
+                "company_name":       signal_data.get("company_name"),
+                "transcript_excerpt": excerpt,
+                "extraction_result":  signal_data,
+            })
+            return {
+                "message": "Signal saved successfully",
+                "signal_id": saved["id"],
+                "timestamp": saved.get("created_at")
+            }
+        except Exception as e:
+            logger.error(f"Error saving signal result: {e}", exc_info=True)
             raise
 
     async def batch_extract_signals(
@@ -709,9 +736,7 @@ class SignalService:
     ) -> List[Dict]:
         """Return saved signals for a user with optional pair/direction filters."""
         try:
-            rows = db.signals.list(user_id=user_id, pair=currency_pair, limit=limit)
-            if direction:
-                rows = [r for r in rows if r.get("primary_direction") == direction]
+            rows = db.signals.list(user_id=user_id, pair=currency_pair, direction=direction, limit=limit)
             return rows
         except Exception as e:
             logger.error(f"Error retrieving signals: {e}", exc_info=True)
@@ -730,7 +755,7 @@ class SignalService:
 
     def delete_signal(self, signal_id: str, user_id: str) -> bool:
         """
-        Delete (unsave) a signal.
+        Delete (hard delete) a signal.
         Returns False if not found or not owned by this user.
         """
         try:
@@ -738,8 +763,8 @@ class SignalService:
             if not row or row.get("user_id") != user_id:
                 logger.warning(f"Signal {signal_id} not found or unauthorized")
                 return False
-            db.signals.update(signal_id, {"is_saved": False})
-            logger.info(f"Deleted signal {signal_id}")
+            db.signals.delete(signal_id)
+            logger.info(f"Hard deleted signal {signal_id}")
             return True
         except Exception as e:
             logger.error(f"Error deleting signal: {e}", exc_info=True)
@@ -774,7 +799,13 @@ class SignalService:
             }
 
             for s in signals:
-                pair = s.get("currency_pair") or "UNKNOWN"
+                # Handle potential list if DB still has old format
+                raw_pair = s.get("currency_pair")
+                if isinstance(raw_pair, list):
+                    pair = raw_pair[0] if raw_pair else "UNKNOWN"
+                else:
+                    pair = raw_pair or "UNKNOWN"
+                
                 stats["by_currency_pair"][pair] = stats["by_currency_pair"].get(pair, 0) + 1
 
                 direction = s.get("primary_direction") or "UNKNOWN"
@@ -943,4 +974,3 @@ class SignalService:
 
         logger.error(f"All retries exhausted: {last_error}", exc_info=True)
         raise last_error
-

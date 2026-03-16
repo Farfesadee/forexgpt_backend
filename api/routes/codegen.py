@@ -126,3 +126,19 @@ async def get_conversation(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+@router.delete("/conversations/{user_id}/{conversation_id}", response_model=dict)
+async def delete_conversation(
+    conversation_id: str,
+    user_id: str,
+    user: JWTPayload = Depends(get_current_user),
+):
+    try:
+        _assert_user_access(user_id, user)
+        success = await service.delete_conversation(conversation_id, user_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        return {"status": "success", "message": "Logic session deleted successfully", "conversation_id": conversation_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
