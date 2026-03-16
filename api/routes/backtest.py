@@ -12,6 +12,8 @@ from models.backtest import (
     SavedBacktestResponse,
     BacktestDetailResponse,
     DeleteBacktestResponse,
+    RunCustomBacktestRequest,      
+    RunCustomBacktestResponse,
 )
 from core.dependencies import get_backtest_service
 from api.middleware.auth_middleware import get_current_user
@@ -127,4 +129,45 @@ async def delete_backtest(backtest_id: str, user_id: str, user: JWTPayload = Dep
     except HTTPException:
         raise
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Run a custom strategy backtest ───────────────────────────────────────────
+
+@router.post("/run/custom", response_model=RunCustomBacktestResponse)
+async def run_custom_backtest(
+    request: RunCustomBacktestRequest,
+    user:    JWTPayload = Depends(get_current_user),
+):
+    """
+    Execute user-generated strategy code against historical price data.
+
+    The code must define a generate_signals(data) function.
+    Results are saved to the backtests table with strategy_name='custom'
+    and appear in the user's backtest history alongside parameterised runs.
+
+    Flow: validate → fetch data → sandbox execute → metrics → save → return
+    """
+    _assert_user_access(request.user_id, user)
+
+    try:
+        result = await service.run_custom_strategy(
+            user_id=request.user_id,
+            custom_code=request.custom_code,
+            pair=request.pair,
+            start_date=request.start_date,
+            end_date=request.end_date,
+            timeframe=request.timeframe,
+            initial_capital=request.initial_capital,
+            position_size_pct=request.position_size_pct,
+            data_source=request.data_source,
+        )
+        return result
+
+    except ValueError as e:
+        # Code validation errors and strategy runtime errors — user's fault
+        raise HTTPException(status_code=400, detail=str(e))
+
+    except Exception as e:
+        # Data fetch failures, timeout, unexpected errors
         raise HTTPException(status_code=500, detail=str(e))
