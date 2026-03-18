@@ -489,7 +489,7 @@ DB calls use public.generated_codes and public.codegen_conversations.
 import uuid
 import asyncio
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 from prompts.codegen_prompt import CODEGEN_SYSTEM_PROMPT
 import logging
 
@@ -683,6 +683,68 @@ class CodeGenService:
             logger.error(f"Error retrieving conversation history: {e}", exc_info=True)
             raise
 
+    def delete_conversation(self, conversation_id: str, user_id: str) -> bool:
+        """
+        Delete all messages in a conversation.
+        Returns False if conversation not found or unauthorized.
+        """
+        try:
+            # Check conversation exists and belongs to user
+            history = self._load_history(conversation_id, user_id)
+            if history is None:
+                return False  # Unauthorized
+            if len(history) == 0:
+                return False  # Not found
+
+            # Delete all messages in the conversation
+            get_db().table("codegen_conversations") \
+                .delete() \
+                .eq("conversation_id", conversation_id) \
+                .eq("user_id", user_id) \
+                .execute()
+
+            logger.info(f"Deleted conversation {conversation_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error deleting conversation: {e}", exc_info=True)
+            raise
+
+    async def generate_improvement(
+        self,
+        user_id: str,
+        original_code: str,
+        backtest_results: Dict[str, Any],
+        mentor_analysis: str,
+        additional_requirements: Optional[str] = None,
+        conversation_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Generate improved strategy based on backtest results and mentor feedback.
+        
+        This is essentially a wrapper around generate_code() that builds a specific
+        user message for improvement mode. All the actual work (calling Mistral,
+        saving to DB, parsing response) is handled by generate_code().
+        """
+        
+        # Build improvement mode user message
+        improvement_message = self._build_improvement_message(
+            original_code=original_code,
+            backtest_results=backtest_results,
+            mentor_analysis=mentor_analysis,
+            additional_requirements=additional_requirements
+        )
+        
+        # Call generate_code() with this message as the strategy description
+        # generate_code() handles everything else: Mistral call, DB saving, parsing
+        result = await self.generate_code(
+            user_id=user_id,
+            strategy_description=improvement_message,
+            conversation_id=conversation_id
+        )
+        
+        return result
+
     # =========================================================================
     # PRIVATE HELPERS
     # =========================================================================
@@ -814,3 +876,47 @@ class CodeGenService:
 
         logger.error(f"All retries exhausted: {last_error}", exc_info=True)
         raise last_error
+    
+    def _build_improvement_message(
+        self,
+        original_code: str,
+        backtest_results: Dict[str, Any],
+        mentor_analysis: str,
+        additional_requirements: Optional[str] = None
+    ) -> str:
+        """
+        Build the user message for improvement mode.
+        
+        This message triggers the IMPROVEMENT MODE section in the system prompt.
+        """
+        
+        message = f"""I backtested this strategy and it underperformed:
+
+ORIGINAL CODE:
+```python
+{original_code}
+```
+
+BACKTEST RESULTS:
+- Sharpe Ratio: {backtest_results.get('sharpe_ratio', 'N/A')} (Poor)
+- Max Drawdown: {backtest_results.get('max_drawdown', 'N/A')}% (High)
+- Win Rate: {backtest_results.get('win_rate', 'N/A')}%
+- Total Return: {backtest_results.get('total_return', 'N/A')}%
+
+EXPERT ANALYSIS:
+{mentor_analysis}
+Please improve this strategy. Focus on:
+1. Adding filters to avoid unfavorable market conditions
+2. Improving risk management (stop losses, position sizing)
+3. Optimizing entry/exit logic
+"""
+        if additional_requirements:
+            message += f"\nADDITIONAL REQUIREMENTS:\n{additional_requirements}\n"
+    
+        message += """
+Provide:
+1. The improved code (complete, runnable)
+2. Explanation of what changed and why
+3. Expected improvements in metrics"""
+    
+        return message
