@@ -161,16 +161,22 @@ class SignalsRepo:
             base = base.eq("direction", direction.lower())
 
         if pair:
+            # try:
+            #     q = base.eq("currency_pair", pair)
+            #     res = q.order("created_at", desc=True).range(offset, offset + limit - 1).execute()
+            # except APIError as e:
+            #     err = str(e).lower()
+            #     if "operator does not exist" in err or "array" in err or "malformed" in err:
+            #         q = base.contains("currency_pair", [pair])
+            #         res = q.order("created_at", desc=True).range(offset, offset + limit - 1).execute()
+            #     else:
+            #         raise
             try:
-                q = base.eq("currency_pair", pair)
+                q = base.contains("currency_pair", [pair])
                 res = q.order("created_at", desc=True).range(offset, offset + limit - 1).execute()
             except APIError as e:
-                err = str(e).lower()
-                if "operator does not exist" in err or "array" in err:
-                    q = base.contains("currency_pair", [pair])
-                    res = q.order("created_at", desc=True).range(offset, offset + limit - 1).execute()
-                else:
-                    raise
+                logger.error(f"Error filtering by pair: {e}")
+                raise
         else:
             res = base.order("created_at", desc=True).range(offset, offset + limit - 1).execute()
         
