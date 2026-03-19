@@ -114,7 +114,7 @@ async def get_user_signals(
 ):
     try:
         _assert_user_access(user_id, user)
-        signals = await service.get_user_signals(
+        signals = service.get_user_signals(
             user_id=user_id,
             limit=limit,
             currency_pair=currency_pair,
@@ -135,7 +135,7 @@ async def get_signal(
 ):
     try:
         _assert_user_access(user_id, user)
-        signal = await service.get_signal_by_id(signal_id, user_id)
+        signal = service.get_signal_by_id(signal_id, user_id)
         if signal is None:
             raise HTTPException(status_code=404, detail="Signal not found")
         return signal
@@ -152,12 +152,27 @@ async def get_statistics(
 ):
     try:
         _assert_user_access(user_id, user)
-        stats = await service.get_signal_statistics(user_id)
+        stats = service.get_signal_statistics(user_id)
         return stats
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# @router.post("/save")
+# async def save_signal(
+#     signal_data: dict,
+#     user: JWTPayload = Depends(get_current_user),
+# ):
+#     try:
+#         result = await service.save_signal_result(
+#             user_id=user.user_id,
+#             signal_data=signal_data
+#         )
+#         return result
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/{user_id}/{signal_id}", response_model=DeleteSignalResponse)
@@ -168,7 +183,7 @@ async def delete_signal(
 ):
     try:
         _assert_user_access(user_id, user)
-        deleted = await service.delete_signal(signal_id, user_id)
+        deleted = service.delete_signal(signal_id, user_id)
         if not deleted:
             raise HTTPException(status_code=404, detail="Signal not found")
         return {"message": "Signal deleted successfully", "signal_id": signal_id}

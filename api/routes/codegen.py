@@ -27,7 +27,9 @@ from models.codegen import (
     GenerateCodeResponse,
     GeneratedCodeSummaryResponse,
     GeneratedCodeDetailResponse,
-    CodeConversationHistoryResponse
+    CodeConversationHistoryResponse,
+    ImproveStrategyRequest,
+    ImproveStrategyResponse
 )
 from core.dependencies import get_codegen_service
 from api.middleware.auth_middleware import get_current_user
@@ -122,6 +124,48 @@ async def get_conversation(
             "conversation_id": conversation_id,
             "history": history
         }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@router.post("/improve", response_model=ImproveStrategyResponse)
+async def improve_strategy(
+    request: ImproveStrategyRequest,
+    user: JWTPayload = Depends(get_current_user),
+):
+    try:
+        if request.user_id and request.user_id != user.user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only improve code for your own account.",
+            )
+        result = await service.generate_improvement(
+            user_id=user.user_id,
+            original_code=request.original_code,
+            backtest_results=request.backtest_results,
+            mentor_analysis=request.mentor_analysis,
+            additional_requirements=request.additional_requirements,
+            conversation_id=request.conversation_id
+        )
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@router.delete("/conversations/{user_id}/{conversation_id}")
+async def delete_conversation(
+    conversation_id: str,
+    user_id: str,
+    user: JWTPayload = Depends(get_current_user),
+):
+    try:
+        _assert_user_access(user_id, user)
+        deleted = service.delete_conversation(conversation_id, user_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        return {"message": "Conversation deleted successfully"}
     except HTTPException:
         raise
     except Exception as e:
