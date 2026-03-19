@@ -265,8 +265,8 @@ class BacktestEngine:
         for position in self.positions.copy():
             self.close_position(position, date, price, market_conditions)
     
-    def update_equity(self, date: datetime, price: float):
-        """Update equity curve with current mark-to-market."""
+    def update_equity(self, date: datetime, price: float, ohlc: Optional[Dict] = None):
+        """Update equity curve with current mark-to-market and OHLC data."""
         # Calculate unrealized P&L
         unrealized_pnl = sum(
             pos.mark_to_market(price) for pos in self.positions
@@ -276,14 +276,24 @@ class BacktestEngine:
         total_equity = self.capital + unrealized_pnl
         
         # Record
-        self.equity_curve.append({
+        record = {
             "date": date,
             "price": price,
             "capital": self.capital,
             "unrealized_pnl": unrealized_pnl,
             "total_equity": total_equity,
             "num_positions": len(self.positions)
-        })
+        }
+        
+        if ohlc:
+            record.update({
+                "open": ohlc.get("open"),
+                "high": ohlc.get("high"),
+                "low": ohlc.get("low"),
+                "close": ohlc.get("close"),
+            })
+            
+        self.equity_curve.append(record)
     
     def run_backtest(
         self,
@@ -338,7 +348,7 @@ class BacktestEngine:
                         self.close_position(pos, date, price, market_conditions)
             
             # Update equity curve
-            self.update_equity(date, price)
+            self.update_equity(date, price, ohlc=row.to_dict())
         
         # Close any remaining positions
         if len(self.positions) > 0:

@@ -3,7 +3,7 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 # from config import setup_logging
-from api.routes import auth, signals, mentor, codegen, backtest
+from api.routes import auth, signals, mentor, codegen, backtest, news
 from api.middleware.auth_middleware import get_current_user
 from models.user import JWTPayload
 # from api.routes import quant_finance 
@@ -30,6 +30,7 @@ app.include_router(signals.router)
 app.include_router(mentor.router)
 app.include_router(codegen.router)
 app.include_router(backtest.router)
+app.include_router(news.router)
 # app.include_router(quant_finance.router)
 
 

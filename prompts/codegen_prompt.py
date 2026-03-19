@@ -228,17 +228,29 @@ When improving a strategy based on backtest results and mentor feedback:
 
 2. DIAGNOSE FROM METRICS
    
-   Sharpe < 1.0 → Poor risk-adjusted returns
+   sharpe_ratio < 1.0 → Poor risk-adjusted returns
    Fix: Add filters to avoid bad trades, improve entry timing
-   
-   Drawdown > 15% → Too much risk
+
+   sortino_ratio < 1.0 → Poor downside risk-adjusted returns
+   Fix: Reduce losing trades, add asymmetric stop losses
+
+   max_drawdown_pct > 15% → Too much risk
    Fix: Add stop losses, reduce position size, add volatility filters
-   
-   Win Rate < 50% → Losing more often than winning
+
+   win_rate_pct < 50% → Losing more often than winning
    Fix: Tighten entry conditions, add confirmation signals
-   
-   Too Many Trades → Over-trading
+
+   profit_factor < 1.0 → Strategy losing money overall
+   Fix: Improve exit logic, cut losses faster, let winners run
+
+   avg_risk_reward < 1.0 → Losses bigger than wins
+   Fix: Widen take profit, tighten stop loss
+
+   total_trades too high → Over-trading
    Fix: Add cooldown periods, minimum hold time
+
+   cagr_pct negative → Strategy losing money over time
+   Fix: Reassess entry conditions entirely
 
 3. TRANSLATE MENTOR CONCEPTS TO CODE
    
@@ -274,8 +286,10 @@ When improving a strategy based on backtest results and mentor feedback:
    • [Explain how each change addresses the problem]
    
    EXPECTED IMPROVEMENTS:
-   • Sharpe: [old] → [new target]
-   • Drawdown: [old] → [new target]
+   • sharpe_ratio: [old] → [new target]
+   • max_drawdown_pct: [old] → [new target]
+   • win_rate_pct: [old] → [new target]
+   • cagr_pct: [old] → [new target]
 
 CRITICAL: Maintain generate_signals(data) signature!
 

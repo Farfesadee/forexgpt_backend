@@ -6,4 +6,18 @@ __pycache__/
 .env
 .fxgptbackendenv
 
-task
+env/
+venv/
+.venv/
+ENV/
+_env
+
+all_columns.txt
+check_db_schema.py
+debug_schema.py
+debug_schema_v2.py
+diagnostic_results.txt
+list_columns.py
+schema_results.txt
+test_output.txt
+test_registration.py

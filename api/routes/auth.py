@@ -284,6 +284,7 @@ async def resend_confirmation(body: PasswordResetRequest):
         )
     }
 
+
 # Login Section
 @router.post(
     "/login",
@@ -644,6 +645,11 @@ def _handle_supabase_auth_error(exc: Exception, context: str) -> None:
         raise HTTPException(status_code=401, detail="Invalid email or password.")
     if "email not confirmed" in err_str:
         raise HTTPException(status_code=401, detail="Please confirm your email before logging in.")
+    if "confirmation email" in err_str or "send" in err_str and "email" in err_str:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="The authentication server failed to send a verification email. Please check your Supabase SMTP settings."
+        )
     if "user already registered" in err_str or "already been registered" in err_str:
         raise HTTPException(status_code=409, detail="An account with this email already exists.")
     if "password" in err_str and "weak" in err_str:
