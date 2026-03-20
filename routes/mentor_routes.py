@@ -629,6 +629,185 @@
 
 
 
+# """
+# routes/mentor_routes.py — FastAPI router for the Mentor module.
+
+# Endpoints
+# ─────────
+# POST   /mentor/conversations                        start a generic conversation
+# POST   /mentor/conversations/{id}/messages          ask a question (generic or follow-up)
+# GET    /mentor/conversations/{id}/messages          get conversation history
+# GET    /mentor/conversations                        list user's conversations
+# DELETE /mentor/conversations/{id}                   delete a conversation
+# POST   /mentor/backtest-conversations               seed a backtest conversation
+# POST   /mentor/analyze-backtest                     pass/fail analysis (stateless)
+
+# Auth
+# ────
+# All endpoints use get_current_user_id from core/dependencies.py.
+# Set DEV_MODE=true in .env to skip auth during development.
+# """
+
+# from fastapi import APIRouter, HTTPException, Depends
+
+# from models.mentor import (
+#     AskQuestionRequest,
+#     AskQuestionResponse,
+#     ConversationHistoryResponse,
+#     ConversationMessageResponse,
+#     ConversationSummaryResponse,
+#     DeleteConversationResponse,
+#     StartBacktestConversationRequest,
+#     StartBacktestConversationResponse,
+# )
+# from services.mentor_service import MentorService
+# from core.dependencies import get_mentor_service, get_current_user_id
+
+# router = APIRouter(prefix="/mentor", tags=["mentor"])
+
+
+# # ---------------------------------------------------------------------------
+# # Generic conversation endpoints
+# # ---------------------------------------------------------------------------
+
+# @router.post("/conversations", response_model=AskQuestionResponse)
+# async def start_conversation(
+#     request: AskQuestionRequest,
+#     user_id: str            = Depends(get_current_user_id),
+#     service: MentorService  = Depends(get_mentor_service),
+# ):
+#     """Start a new generic mentor conversation."""
+#     try:
+#         result = await service.ask_question(
+#             user_id         = user_id,
+#             message         = request.message,
+#             conversation_id = None,
+#         )
+#         return AskQuestionResponse(**result)
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
+
+
+# @router.post("/conversations/{conversation_id}/messages", response_model=AskQuestionResponse)
+# async def ask_question(
+#     conversation_id: str,
+#     request:         AskQuestionRequest,
+#     user_id:         str           = Depends(get_current_user_id),
+#     service:         MentorService = Depends(get_mentor_service),
+# ):
+#     """
+#     Ask a question in an existing conversation.
+#     Works for both generic and backtest follow-up conversations.
+#     """
+#     try:
+#         result = await service.ask_question(
+#             user_id         = user_id,
+#             message         = request.message,
+#             conversation_id = conversation_id,
+#         )
+#         return AskQuestionResponse(**result)
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
+
+
+# @router.get("/conversations/{conversation_id}/messages", response_model=ConversationHistoryResponse)
+# async def get_conversation_history(
+#     conversation_id: str,
+#     user_id:         str           = Depends(get_current_user_id),
+#     service:         MentorService = Depends(get_mentor_service),
+# ):
+#     """Retrieve full message history for a conversation."""
+#     try:
+#         history = await service.get_conversation_history(conversation_id, user_id)
+#         if history is None:
+#             raise HTTPException(status_code=404, detail="Conversation not found or unauthorized.")
+#         return ConversationHistoryResponse(
+#             conversation_id = conversation_id,
+#             history         = [ConversationMessageResponse(**m) for m in history],
+#             message_count   = len(history),
+#         )
+#     except HTTPException:
+#         raise
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
+
+
+# @router.get("/conversations", response_model=list[ConversationSummaryResponse])
+# async def list_conversations(
+#     limit:   int           = 20,
+#     user_id: str           = Depends(get_current_user_id),
+#     service: MentorService = Depends(get_mentor_service),
+# ):
+#     """List all conversations for a user (generic + backtest, newest first)."""
+#     try:
+#         conversations = await service.list_user_conversations(user_id, limit)
+#         return [ConversationSummaryResponse(**c) for c in conversations]
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
+
+
+# @router.delete("/conversations/{conversation_id}", response_model=DeleteConversationResponse)
+# async def delete_conversation(
+#     conversation_id: str,
+#     user_id:         str           = Depends(get_current_user_id),
+#     service:         MentorService = Depends(get_mentor_service),
+# ):
+#     """Delete a conversation and all its messages."""
+#     try:
+#         deleted = await service.delete_conversation(conversation_id, user_id)
+#         if not deleted:
+#             raise HTTPException(status_code=404, detail="Conversation not found or unauthorized.")
+#         return DeleteConversationResponse(
+#             message         = "Conversation deleted successfully.",
+#             conversation_id = conversation_id,
+#         )
+#     except HTTPException:
+#         raise
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
+
+
+# # ---------------------------------------------------------------------------
+# # Backtest-seeded conversation  (service-to-service)
+# # ---------------------------------------------------------------------------
+
+# @router.post("/backtest-conversations", response_model=StartBacktestConversationResponse)
+# async def start_backtest_conversation(
+#     request: StartBacktestConversationRequest,
+#     user_id: str           = Depends(get_current_user_id),
+#     service: MentorService = Depends(get_mentor_service),
+# ):
+#     """
+#     Seed a new mentor conversation with full backtest context.
+#     Returns an initial analysis + conversation_id for follow-up questions.
+#     """
+#     try:
+#         result = await service.start_backtest_conversation(
+#             user_id          = user_id,
+#             backtest_context = request.backtest_context,
+#         )
+#         return StartBacktestConversationResponse(**result)
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -648,12 +827,9 @@ GET    /mentor/conversations/{id}/messages          get conversation history
 GET    /mentor/conversations                        list user's conversations
 DELETE /mentor/conversations/{id}                   delete a conversation
 POST   /mentor/backtest-conversations               seed a backtest conversation
-POST   /mentor/analyze-backtest                     pass/fail analysis (stateless)
 
-Auth
-────
-All endpoints use get_current_user_id from core/dependencies.py.
-Set DEV_MODE=true in .env to skip auth during development.
+Auth: uses get_current_user from api.middleware.auth_middleware
+      user_id is extracted from the JWT token — not from the request body
 """
 
 from fastapi import APIRouter, HTTPException, Depends
@@ -667,11 +843,11 @@ from models.mentor import (
     DeleteConversationResponse,
     StartBacktestConversationRequest,
     StartBacktestConversationResponse,
-    AnalyzeBacktestRequest,
-    AnalyzeBacktestResponse,
 )
+from models.user import JWTPayload
 from services.mentor_service import MentorService
-from core.dependencies import get_mentor_service, get_current_user_id
+from core.dependencies import get_mentor_service
+from api.middleware.auth_middleware import get_current_user
 
 router = APIRouter(prefix="/mentor", tags=["mentor"])
 
@@ -683,13 +859,13 @@ router = APIRouter(prefix="/mentor", tags=["mentor"])
 @router.post("/conversations", response_model=AskQuestionResponse)
 async def start_conversation(
     request: AskQuestionRequest,
-    user_id: str            = Depends(get_current_user_id),
-    service: MentorService  = Depends(get_mentor_service),
+    user:    JWTPayload    = Depends(get_current_user),
+    service: MentorService = Depends(get_mentor_service),
 ):
     """Start a new generic mentor conversation."""
     try:
         result = await service.ask_question(
-            user_id         = user_id,
+            user_id         = user.user_id,
             message         = request.message,
             conversation_id = None,
         )
@@ -702,7 +878,7 @@ async def start_conversation(
 async def ask_question(
     conversation_id: str,
     request:         AskQuestionRequest,
-    user_id:         str           = Depends(get_current_user_id),
+    user:            JWTPayload    = Depends(get_current_user),
     service:         MentorService = Depends(get_mentor_service),
 ):
     """
@@ -711,7 +887,7 @@ async def ask_question(
     """
     try:
         result = await service.ask_question(
-            user_id         = user_id,
+            user_id         = user.user_id,
             message         = request.message,
             conversation_id = conversation_id,
         )
@@ -723,12 +899,12 @@ async def ask_question(
 @router.get("/conversations/{conversation_id}/messages", response_model=ConversationHistoryResponse)
 async def get_conversation_history(
     conversation_id: str,
-    user_id:         str           = Depends(get_current_user_id),
+    user:            JWTPayload    = Depends(get_current_user),
     service:         MentorService = Depends(get_mentor_service),
 ):
     """Retrieve full message history for a conversation."""
     try:
-        history = await service.get_conversation_history(conversation_id, user_id)
+        history = await service.get_conversation_history(conversation_id, user.user_id)
         if history is None:
             raise HTTPException(status_code=404, detail="Conversation not found or unauthorized.")
         return ConversationHistoryResponse(
@@ -745,12 +921,12 @@ async def get_conversation_history(
 @router.get("/conversations", response_model=list[ConversationSummaryResponse])
 async def list_conversations(
     limit:   int           = 20,
-    user_id: str           = Depends(get_current_user_id),
+    user:    JWTPayload    = Depends(get_current_user),
     service: MentorService = Depends(get_mentor_service),
 ):
     """List all conversations for a user (generic + backtest, newest first)."""
     try:
-        conversations = await service.list_user_conversations(user_id, limit)
+        conversations = await service.list_user_conversations(user.user_id, limit)
         return [ConversationSummaryResponse(**c) for c in conversations]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -759,12 +935,12 @@ async def list_conversations(
 @router.delete("/conversations/{conversation_id}", response_model=DeleteConversationResponse)
 async def delete_conversation(
     conversation_id: str,
-    user_id:         str           = Depends(get_current_user_id),
+    user:            JWTPayload    = Depends(get_current_user),
     service:         MentorService = Depends(get_mentor_service),
 ):
     """Delete a conversation and all its messages."""
     try:
-        deleted = await service.delete_conversation(conversation_id, user_id)
+        deleted = await service.delete_conversation(conversation_id, user.user_id)
         if not deleted:
             raise HTTPException(status_code=404, detail="Conversation not found or unauthorized.")
         return DeleteConversationResponse(
@@ -778,13 +954,13 @@ async def delete_conversation(
 
 
 # ---------------------------------------------------------------------------
-# Backtest-seeded conversation  (service-to-service)
+# Backtest-seeded conversation
 # ---------------------------------------------------------------------------
 
 @router.post("/backtest-conversations", response_model=StartBacktestConversationResponse)
 async def start_backtest_conversation(
     request: StartBacktestConversationRequest,
-    user_id: str           = Depends(get_current_user_id),
+    user:    JWTPayload    = Depends(get_current_user),
     service: MentorService = Depends(get_mentor_service),
 ):
     """
@@ -793,33 +969,9 @@ async def start_backtest_conversation(
     """
     try:
         result = await service.start_backtest_conversation(
-            user_id          = user_id,
+            user_id          = user.user_id,
             backtest_context = request.backtest_context,
         )
         return StartBacktestConversationResponse(**result)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ---------------------------------------------------------------------------
-# Pass / Fail analysis  (stateless)
-# ---------------------------------------------------------------------------
-
-@router.post("/analyze-backtest", response_model=AnalyzeBacktestResponse)
-async def analyze_backtest(
-    request: AnalyzeBacktestRequest,
-    user_id: str           = Depends(get_current_user_id),
-    service: MentorService = Depends(get_mentor_service),
-):
-    """
-    Evaluate backtest results as PASS or FAIL and return an educational explanation.
-    Stateless — does not create a conversation.
-    """
-    try:
-        result = await service.analyze_backtest_results(
-            strategy_type = request.strategy_type,
-            metrics       = request.metrics,
-        )
-        return AnalyzeBacktestResponse(**result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
