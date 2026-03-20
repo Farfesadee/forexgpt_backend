@@ -92,12 +92,11 @@ class MentorRepo:
         return q.limit(limit).execute().data
 
     # In your database service
-    def create_conversation(self, id, user_id, title):
-        return self._conv.insert({
-            "id": id, 
-            "user_id": user_id, 
-            "title": title
-        }).execute() # .execute() returns the data created in the DB`
+    def create_conversation(self, id, user_id, title, signal_id=None):
+        payload = {"id": id, "user_id": user_id, "title": title}
+        if signal_id:
+            payload["signal_id"] = signal_id
+        return self._conv.insert(payload).execute() # .execute() returns the data created in the DB`
 
     def archive_conversation(self, conversation_id: str) -> None:
         self._conv.update({"is_archived": True}).eq("id", conversation_id).execute()
