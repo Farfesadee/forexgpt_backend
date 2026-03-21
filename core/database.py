@@ -20,6 +20,7 @@ import logging
 from typing import Optional, List
 from supabase import create_client, Client
 from core.config import settings
+from postgrest.exceptions import APIError
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,9 @@ class ProfilesRepo:
 
     def get(self, user_id: str) -> dict:
         return self._t.select("*").eq("id", user_id).single().execute().data
+
+    def create(self, data: dict) -> dict:
+        return self._t.insert(data).execute().data[0]
 
     def update(self, user_id: str, data: dict) -> dict:
         res = self._t.update(data).eq("id", user_id).execute()
@@ -75,18 +79,24 @@ class MentorRepo:
 
     # Conversations
     def list_conversations(self, user_id: str, include_archived: bool = False, limit: int = 30) -> List[dict]:
-        q = get_db().table("mentor_history").select("*").eq("user_id", user_id)
+        q = (
+            get_db().table("mentor_history")
+            .select(
+                "id, user_id, title, message_count, is_archived, last_message_at, "
+                "created_at, last_response_preview, last_model_used"
+            )
+            .eq("user_id", user_id)
+        )
         if not include_archived:
             q = q.eq("is_archived", False)
         return q.limit(limit).execute().data
 
     # In your database service
-    def create_conversation(self, id, user_id, title):
-        return self._conv.insert({
-            "id": id, 
-            "user_id": user_id, 
-            "title": title
-        }).execute() # .execute() returns the data created in the DB`
+    def create_conversation(self, id, user_id, title, signal_id=None):
+        payload = {"id": id, "user_id": user_id, "title": title}
+        if signal_id:
+            payload["signal_id"] = signal_id
+        return self._conv.insert(payload).execute() # .execute() returns the data created in the DB`
 
     def archive_conversation(self, conversation_id: str) -> None:
         self._conv.update({"is_archived": True}).eq("id", conversation_id).execute()
@@ -124,29 +134,60 @@ class SignalsRepo:
     def _t(self): return get_db().table("signals")
 
     def create(self, user_id: str, data: dict) -> dict:
-        return self._t.insert({"user_id": user_id, **data}).execute().data[0]
+        try:
+            return self._t.insert({"user_id": user_id, **data}).execute().data[0]
+        except APIError as e:
+            err = str(e).lower()
+            if "malformed array literal" in err and isinstance(data.get("currency_pair"), str):
+                fixed = {**data, "currency_pair": [data["currency_pair"]]}
+                return self._t.insert({"user_id": user_id, **fixed}).execute().data[0]
+            raise
 
     def list(
         self, user_id: str,
-        source_type: Optional[str] = None,
-        sentiment: Optional[str] = None,
         pair: Optional[str] = None,
-        saved_only: bool = False,
-        limit: int = 20,
+        direction: Optional[str] = None,
+        limit: int = 50,
         offset: int = 0,
-    ) ->List[dict]:
-        q = (
+    ) -> List[dict]:
+        base = (
             self._t.select(
-                "id, source_type, source_label, base_currency, primary_sentiment, "
-                "primary_direction, primary_strength, affected_pairs, confidence, "
-                "hf_endpoint_id, hf_model_version, is_saved, created_at"
+                "id, company_name, currency_pair, direction, confidence, "
+                "reasoning, magnitude, time_horizon, created_at"
             ).eq("user_id", user_id)
         )
-        if source_type:  q = q.eq("source_type", source_type)
-        if sentiment:    q = q.eq("primary_sentiment", sentiment)
-        if saved_only:   q = q.eq("is_saved", True)
-        if pair:         q = q.contains("affected_pairs", [pair])
-        return q.order("created_at", desc=True).range(offset, offset + limit - 1).execute().data
+        if direction:
+            base = base.eq("direction", direction.lower())
+
+        if pair:
+            # try:
+            #     q = base.eq("currency_pair", pair)
+            #     res = q.order("created_at", desc=True).range(offset, offset + limit - 1).execute()
+            # except APIError as e:
+            #     err = str(e).lower()
+            #     if "operator does not exist" in err or "array" in err or "malformed" in err:
+            #         q = base.contains("currency_pair", [pair])
+            #         res = q.order("created_at", desc=True).range(offset, offset + limit - 1).execute()
+            #     else:
+            #         raise
+            try:
+                q = base.contains("currency_pair", [pair])
+                res = q.order("created_at", desc=True).range(offset, offset + limit - 1).execute()
+            except APIError as e:
+                logger.error(f"Error filtering by pair: {e}")
+                raise
+        else:
+            res = base.order("created_at", desc=True).range(offset, offset + limit - 1).execute()
+        
+        # res.data is already a list of dicts. 
+        # Ensure 'signal_id' is present for Pydantic models in routes/signals.py
+        for row in res.data:
+            row["signal_id"] = str(row["id"])
+            cp = row.get("currency_pair")
+            if isinstance(cp, list):
+                row["currency_pair"] = cp[0] if cp else None
+            
+        return res.data
 
     def get(self, signal_id: str) -> dict:
         return self._t.select("*").eq("id", signal_id).single().execute().data
@@ -156,6 +197,9 @@ class SignalsRepo:
             "p_user_id": user_id, "p_pair": pair,
             "p_source_type": source_type, "p_limit": limit, "p_offset": 0,
         }).execute().data
+
+    def delete(self, signal_id: str) -> None:
+        self._t.delete().eq("id", signal_id).execute()
 
     def update(self, signal_id: str, data: dict) -> None:
         self._t.update(data).eq("id", signal_id).execute()

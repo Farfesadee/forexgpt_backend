@@ -489,13 +489,33 @@ DB calls use public.generated_codes and public.codegen_conversations.
 import uuid
 import asyncio
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 from prompts.codegen_prompt import CODEGEN_SYSTEM_PROMPT
 import logging
 
 from core.database import get_db
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_timestamp(value) -> str:
+    """
+    Normalize DB timestamp values to ISO format (includes year).
+    Keeps original value only when it cannot be parsed.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return ""
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00")).isoformat()
+        except ValueError:
+            return raw
+    return str(value)
 
 
 class CodeGenService:
@@ -610,13 +630,41 @@ class CodeGenService:
                     "id":          r["id"],
                     "conversation_id": r.get("conversation_id"),
                     "description": (r.get("description") or "")[:100],
-                    "created_at":  r.get("created_at"),
+                    "created_at":  _normalize_timestamp(r.get("created_at")),
                 }
                 for r in rows
             ]
         except Exception as e:
             logger.error(f"Error listing generated codes: {e}", exc_info=True)
             raise
+
+    # async def list_user_conversations(self, user_id: str, limit: int = 20) -> List[Dict]:
+    #     """
+    #     List unique logic sessions for a user (most recent first).
+    #     Groups by conversation_id.
+    #     """
+    #     try:
+    #         # First, get the unique conversation IDs and their latest message
+    #         result = (
+    #             get_db().table("codegen_conversations")
+    #             .select("conversation_id, content, created_at")
+    #             .eq("user_id", user_id)
+    #             .order("created_at", desc=True)
+    #             .execute()
+    #         )
+    #         rows = result.data or []
+    #         return [
+    #             {
+    #                 "id":          r["id"],
+    #                 "conversation_id": r.get("conversation_id"),
+    #                 "description": (r.get("description") or "")[:100],
+    #                 "created_at":  _normalize_timestamp(r.get("created_at")),
+    #             }
+    #             for r in rows
+    #         ]
+    #     except Exception as e:
+    #         logger.error(f"Error listing logic sessions: {e}", exc_info=True)
+    #         raise
 
     async def get_generated_code(self, code_id: str, user_id: str) -> Optional[Dict]:
         """Return a specific strategy by ID. None if not found or unauthorized."""
@@ -637,7 +685,7 @@ class CodeGenService:
                 "code":            row.get("code"),
                 "description":     row.get("description"),
                 "conversation_id": row.get("conversation_id"),
-                "created_at":      row.get("created_at"),
+                "created_at":      _normalize_timestamp(row.get("created_at")),
             }
         except Exception as e:
             logger.error(f"Error retrieving generated code: {e}", exc_info=True)
@@ -651,17 +699,100 @@ class CodeGenService:
             history = self._load_history(conversation_id, user_id)
             if history is None:
                 return None
-            return [
-                {
+            
+            # Fetch codes for this conversation to attach to assistant messages
+            codes_res = (
+                get_db().table("generated_codes")
+                .select("code, created_at")
+                .eq("conversation_id", conversation_id)
+                .order("created_at")
+                .execute()
+            )
+            codes = codes_res.data or []
+            
+            result = []
+            code_idx = 0
+            for m in history:
+                msg = {
                     "role":      m["role"],
                     "content":   m["content"],
-                    "timestamp": m.get("timestamp", ""),
+                    "timestamp": _normalize_timestamp(m.get("timestamp")),
+                    "code":      None,
                 }
-                for m in history
-            ]
+                if m["role"] == "assistant":
+                    if code_idx < len(codes):
+                        msg["code"] = codes[code_idx]["code"]
+                        code_idx += 1
+
+                result.append(msg)
+
+            return result
         except Exception as e:
             logger.error(f"Error retrieving conversation history: {e}", exc_info=True)
             raise
+
+    def delete_conversation(self, conversation_id: str, user_id: str) -> bool:
+        """
+        Delete all messages in a conversation.
+        Returns False if conversation not found or unauthorized.
+        """
+        try:
+            # Check conversation exists and belongs to user
+            history = self._load_history(conversation_id, user_id)
+            if history is None:
+                return False  # Unauthorized
+            if len(history) == 0:
+                return False  # Not found
+
+            # Delete all messages in the conversation
+            get_db().table("codegen_conversations") \
+                .delete() \
+                .eq("conversation_id", conversation_id) \
+                .eq("user_id", user_id) \
+                .execute()
+
+            logger.info(f"Deleted conversation {conversation_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error deleting conversation: {e}", exc_info=True)
+            raise
+
+    async def generate_improvement(
+        self,
+        user_id: str,
+        original_code: str,
+        backtest_results: Dict[str, Any],
+        mentor_analysis: str,
+        additional_requirements: Optional[str] = None,
+        conversation_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Generate improved strategy based on backtest results and mentor feedback.
+        
+        This is essentially a wrapper around generate_code() that builds a specific
+        user message for improvement mode. All the actual work (calling Mistral,
+        saving to DB, parsing response) is handled by generate_code().
+        """
+        
+        # Build improvement mode user message
+        improvement_message = self._build_improvement_message(
+            original_code=original_code,
+            backtest_results=backtest_results,
+            mentor_analysis=mentor_analysis,
+            additional_requirements=additional_requirements
+        )
+        
+        # Call generate_code() with this message as the strategy description
+        # generate_code() handles everything else: Mistral call, DB saving, parsing
+        result = await self.generate_code(
+            user_id=user_id,
+            strategy_description=improvement_message,
+            conversation_id=conversation_id
+        )
+        
+        return result
+
 
     # =========================================================================
     # PRIVATE HELPERS
@@ -711,7 +842,7 @@ class CodeGenService:
                 {
                     "role":      m["role"],
                     "content":   m["content"],
-                    "timestamp": m.get("created_at", ""),
+                    "timestamp": _normalize_timestamp(m.get("created_at")),
                 }
                 for m in result.data
             ]
@@ -794,3 +925,56 @@ class CodeGenService:
 
         logger.error(f"All retries exhausted: {last_error}", exc_info=True)
         raise last_error
+    
+    def _build_improvement_message(
+        self,
+        original_code: str,
+        backtest_results: Dict[str, Any],
+        mentor_analysis: str,
+        additional_requirements: Optional[str] = None
+    ) -> str:
+        """
+        Build the user message for improvement mode.
+        
+        This message triggers the IMPROVEMENT MODE section in the system prompt.
+        """
+        
+        message = f"""I backtested this strategy and it underperformed:
+
+ORIGINAL CODE:
+```python
+{original_code}
+```
+
+BACKTEST RESULTS:
+- Strategy: {backtest_results.get('strategy_name', 'N/A')}
+- Currency Pair: {backtest_results.get('pair', 'N/A')}
+- Period: {backtest_results.get('start_date', 'N/A')} to {backtest_results.get('end_date', 'N/A')}
+- Total Return: {backtest_results.get('total_return_pct', 'N/A')}%
+- Sharpe Ratio: {backtest_results.get('sharpe_ratio', 'N/A')}
+- Sortino Ratio: {backtest_results.get('sortino_ratio', 'N/A')}
+- Max Drawdown: {backtest_results.get('max_drawdown_pct', 'N/A')}%
+- Win Rate: {backtest_results.get('win_rate_pct', 'N/A')}%
+- Total Trades: {backtest_results.get('total_trades', 'N/A')}
+- Profit Factor: {backtest_results.get('profit_factor', 'N/A')}
+- Average Risk/Reward: {backtest_results.get('avg_risk_reward', 'N/A')}
+- CAGR: {backtest_results.get('cagr_pct', 'N/A')}%
+- Annual Volatility: {backtest_results.get('volatility_annual_pct', 'N/A')}%
+
+EXPERT ANALYSIS:
+{mentor_analysis}
+Please improve this strategy. Focus on:
+1. Adding filters to avoid unfavorable market conditions
+2. Improving risk management (stop losses, position sizing)
+3. Optimizing entry/exit logic
+"""
+        if additional_requirements:
+            message += f"\nADDITIONAL REQUIREMENTS:\n{additional_requirements}\n"
+    
+        message += """
+Provide:
+1. The improved code (complete, runnable)
+2. Explanation of what changed and why
+3. Expected improvements in metrics"""
+    
+        return message
