@@ -53,7 +53,7 @@ from models.user import (
     PasswordResetRequest, PasswordUpdateRequest,
     OAuthCallbackRequest, EmailConfirmRequest,
     ProfileUpdateRequest, ProfileUpdateResponse,
-    UserProfile, UserDashboard,
+    UserProfile, UserDashboard, ActivityLogItem,
     JWTPayload,
 )
 
@@ -609,6 +609,22 @@ async def get_dashboard(user: JWTPayload = Depends(get_current_user)):
     except Exception as e:
         logger.error(f"Dashboard fetch error for {user.user_id}: {e}")
         raise HTTPException(status_code=500, detail="Could not load dashboard.")
+
+# Activity Log
+@router.get(
+    "/activity",
+    response_model=list[ActivityLogItem],
+    summary="Get recent activity log entries for the current user",
+)
+async def get_activity(
+    limit: int = 20,
+    user: JWTPayload = Depends(get_current_user),
+):
+    try:
+        return db.activity.list(user.user_id, limit=limit)
+    except Exception as e:
+        logger.error(f"Activity log fetch error for {user.user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Could not load activity log.")
 
 # Session Health Check Section
 
