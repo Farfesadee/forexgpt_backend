@@ -355,6 +355,16 @@ class ActivityRepo:
             "p_metadata":    metadata or {},
         }).execute()
 
+    def list(self, user_id: str, limit: int = 20) -> List[dict]:
+        return (
+            get_db().table("activity_log")
+            .select("id, user_id, action, entity_type, entity_id, metadata, created_at")
+            .eq("user_id", user_id)
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute().data
+        )
+
 # Single Database Access Object 
 class Database:
     """

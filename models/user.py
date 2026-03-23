@@ -166,26 +166,27 @@ class UserDashboard(BaseModel):
     id:               str
     display_name:     Optional[str]
     email:            str
-    preferred_pairs:  List[str]
-
-    # Live aggregates
+    # Live aggregates (align to user_dashboard view)
     active_mentor_conversations: int
-    active_quant_sessions:       int
     total_signals:               int
-    saved_signals:               int
     total_strategies:            int
     validated_strategies:        int
     completed_backtests:         int
 
-    # Best performance
-    best_sharpe:      Optional[float]
-    avg_return_pct:   Optional[float]
-
     # Timestamps
     last_mentor_activity:   Optional[datetime]
-    last_quant_activity:    Optional[datetime]
     last_signal_extracted:  Optional[datetime]
     member_since:           datetime
+
+
+class ActivityLogItem(BaseModel):
+    id:          str
+    user_id:     str
+    action:      str
+    entity_type: Optional[str] = None
+    entity_id:   Optional[str] = None
+    metadata:    dict = {}
+    created_at:  datetime
 
 # JWT Payload Schema 
 
