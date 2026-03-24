@@ -623,21 +623,21 @@ class CodeGenService:
         Groups by conversation_id.
         """
         try:
-            # First, get the unique conversation IDs and their latest message
             result = (
-                get_db().table("codegen_conversations")
-                .select("conversation_id, content, created_at")
+                get_db().table("generated_codes")
+                .select("id, conversation_id, description, created_at")
                 .eq("user_id", user_id)
                 .order("created_at", desc=True)
+                .limit(limit)
                 .execute()
             )
             rows = result.data or []
             return [
                 {
-                    "id":          r["id"],
+                    "id":              r["id"],
                     "conversation_id": r.get("conversation_id"),
-                    "description": (r.get("description") or "")[:100],
-                    "created_at":  _normalize_timestamp(r.get("created_at")),
+                    "description":     (r.get("description") or "")[:100],
+                    "created_at":      _normalize_timestamp(r.get("created_at")),
                 }
                 for r in rows
             ]
@@ -863,9 +863,9 @@ class CodeGenService:
         return code, explanation
 
     async def _generate_response(self, messages: List[Dict]) -> str:
-        """Call Mistral with up to 3 retries. temperature=0.3 for deterministic code."""
+        """Call Mistral with up to 2 retries. temperature=0.3 for deterministic code."""
         last_error = None
-        for attempt in range(3):
+        for attempt in range(2):
             try:
                 response = await self.client.chat.complete_async(
                     model=self.model_id,
@@ -878,8 +878,8 @@ class CodeGenService:
             except Exception as e:
                 last_error = e
                 logger.warning(f"_generate_response attempt {attempt + 1} failed: {e}")
-                if attempt < 2:
-                    await asyncio.sleep(2)
+                if attempt < 1:
+                    await asyncio.sleep(1)
 
         logger.error(f"All retries exhausted: {last_error}", exc_info=True)
         raise last_error

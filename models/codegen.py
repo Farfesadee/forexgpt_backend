@@ -5,7 +5,7 @@ Request and Response models for code generation endpoints
 """
 
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 
 
 # ============================================================================
@@ -59,17 +59,17 @@ class GenerateCodeResponse(BaseModel):
 class GeneratedCodeSummaryResponse(BaseModel):
     """Response model for a code summary in list"""
     id: str
-    conversation_id: str
-    description: str
+    conversation_id: Optional[str] = None   # NULL-safe: some rows may lack a conversation_id
+    description: Optional[str] = None
     created_at: str
 
 
 class GeneratedCodeDetailResponse(BaseModel):
     """Response model for full generated code details"""
     id: str
-    conversation_id: str
-    code: str
-    description: str
+    conversation_id: Optional[str] = None   # NULL-safe
+    code: Optional[str] = None
+    description: Optional[str] = None
     created_at: str
 
 
@@ -83,4 +83,4 @@ class CodeConversationMessageResponse(BaseModel):
 class CodeConversationHistoryResponse(BaseModel):
     """Response model for code generation conversation history"""
     conversation_id: str
-    history: list[CodeConversationMessageResponse]
+    history: List[CodeConversationMessageResponse]
