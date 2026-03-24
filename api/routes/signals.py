@@ -160,19 +160,19 @@ async def get_statistics(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/save")
-async def save_signal(
-    signal_data: dict,
-    user: JWTPayload = Depends(get_current_user),
-):
-    try:
-        result = await service.save_signal_result(
-            user_id=user.user_id,
-            signal_data=signal_data
-        )
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+# @router.post("/save")
+# async def save_signal(
+#     signal_data: dict,
+#     user: JWTPayload = Depends(get_current_user),
+# ):
+#     try:
+#         result = await service.save_signal_result(
+#             user_id=user.user_id,
+#             signal_data=signal_data
+#         )
+#         return result
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/{user_id}/{signal_id}", response_model=DeleteSignalResponse)

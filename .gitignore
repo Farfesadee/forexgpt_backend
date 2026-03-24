@@ -10,6 +10,7 @@ env/
 venv/
 .venv/
 ENV/
+_env
 
 all_columns.txt
 check_db_schema.py

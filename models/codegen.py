@@ -31,6 +31,39 @@ class GenerateCodeRequest(BaseModel):
             }
         }
 
+class ImproveStrategyRequest(BaseModel):
+    """Request model for strategy improvement"""
+    user_id: Optional[str] = None
+    original_code: str
+    backtest_results: dict
+    mentor_analysis: str
+    additional_requirements: Optional[str] = None
+    conversation_id: Optional[str] = None
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "user_id": "user_123",
+                "original_code": "def generate_signals(data): ...",
+                "backtest_results": {
+                    "strategy_name": "custom",
+                    "pair": "EURUSD",
+                    "start_date": "2021-01-01",
+                    "end_date": "2023-12-29",
+                    "total_return_pct": -29.99,
+                    "sharpe_ratio": -4.83,
+                    "max_drawdown_pct": -30.24,
+                    "win_rate_pct": 67.92,
+                    "total_trades": 53,
+                    "profit_factor": 1.94,
+                    "sortino_ratio": -5.08,
+                    "cagr_pct": -10.87
+                },
+                "mentor_analysis": "Strategy failed because it trades into trends...",
+                "additional_requirements": "Also add time-based filters",
+                "conversation_id": None
+            }
+        }
 
 # ============================================================================
 # RESPONSE MODELS
@@ -78,9 +111,19 @@ class CodeConversationMessageResponse(BaseModel):
     role: str
     content: str
     timestamp: Optional[str] = None
+    code: Optional[str] = None
 
 
 class CodeConversationHistoryResponse(BaseModel):
     """Response model for code generation conversation history"""
     conversation_id: str
-    history: List[CodeConversationMessageResponse]
+    history: list[CodeConversationMessageResponse]
+
+class ImproveStrategyResponse(BaseModel):
+    """Response model for improved strategy code"""
+    code: str
+    explanation: str
+    conversation_id: str
+    code_id: Optional[str] = None
+    language: str
+    timestamp: str

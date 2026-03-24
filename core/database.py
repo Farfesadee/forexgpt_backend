@@ -92,12 +92,11 @@ class MentorRepo:
         return q.limit(limit).execute().data
 
     # In your database service
-    def create_conversation(self, id, user_id, title):
-        return self._conv.insert({
-            "id": id, 
-            "user_id": user_id, 
-            "title": title
-        }).execute() # .execute() returns the data created in the DB`
+    def create_conversation(self, id, user_id, title, signal_id=None):
+        payload = {"id": id, "user_id": user_id, "title": title}
+        if signal_id:
+            payload["signal_id"] = signal_id
+        return self._conv.insert(payload).execute() # .execute() returns the data created in the DB`
 
     def archive_conversation(self, conversation_id: str) -> None:
         self._conv.update({"is_archived": True}).eq("id", conversation_id).execute()
@@ -161,16 +160,22 @@ class SignalsRepo:
             base = base.eq("direction", direction.lower())
 
         if pair:
+            # try:
+            #     q = base.eq("currency_pair", pair)
+            #     res = q.order("created_at", desc=True).range(offset, offset + limit - 1).execute()
+            # except APIError as e:
+            #     err = str(e).lower()
+            #     if "operator does not exist" in err or "array" in err or "malformed" in err:
+            #         q = base.contains("currency_pair", [pair])
+            #         res = q.order("created_at", desc=True).range(offset, offset + limit - 1).execute()
+            #     else:
+            #         raise
             try:
-                q = base.eq("currency_pair", pair)
+                q = base.contains("currency_pair", [pair])
                 res = q.order("created_at", desc=True).range(offset, offset + limit - 1).execute()
             except APIError as e:
-                err = str(e).lower()
-                if "operator does not exist" in err or "array" in err:
-                    q = base.contains("currency_pair", [pair])
-                    res = q.order("created_at", desc=True).range(offset, offset + limit - 1).execute()
-                else:
-                    raise
+                logger.error(f"Error filtering by pair: {e}")
+                raise
         else:
             res = base.order("created_at", desc=True).range(offset, offset + limit - 1).execute()
         
