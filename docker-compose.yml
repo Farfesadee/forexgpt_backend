@@ -1,0 +1,60 @@
+# ============================================================
+# docker-compose.yml — ForexGPT Backend
+# ============================================================
+# Commands:
+#   Start:   docker-compose up -d
+#   Stop:    docker-compose down
+#   Rebuild: docker-compose up --build -d
+#   Logs:    docker-compose logs -f
+# ============================================================
+
+version: "3.9"
+
+services:
+  forexgpt-backend:
+    # Build from Dockerfile in current directory
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    # Container name — used in docker logs and docker ps
+    container_name: forexgpt-backend
+
+    # Map host port 8001 to container port 8000
+    # Nginx proxies requests from api.forexgpt.com.ng to localhost:8001
+    # Container internally always runs on 8000
+    ports:
+      - "8001:8000"
+
+    # Load all environment variables from .env file
+    # This is how Docker injects your keys without baking them into the image
+    env_file:
+      - .env
+
+    # Always restart the container if it crashes
+    # on-failure: only restart on non-zero exit codes
+    restart: unless-stopped
+
+    # Resource limits — prevents the container from consuming
+    # all server memory if something goes wrong
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+
+    # Health check — Docker monitors this to know container is alive
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/docs"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    # Logging — keeps logs manageable, max 50MB per file, 3 files
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
