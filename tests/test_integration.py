@@ -253,8 +253,7 @@ async def test_complete_flow(user_id, sample_strategy_code):
             "Step 3 failed: Mentor analysis is too short to be useful"
         )
 
-        # Step 4: Feed original code + results + mentor analysis to CodeGen
-        # and ask it to produce an improved version
+        # Step 4: Feed original code + results + mentor analysis to CodeGen and ask it to produce an improved version
         improved_result = await codegen.generate_improvement(
             user_id=user_id,
             original_code=original_code,

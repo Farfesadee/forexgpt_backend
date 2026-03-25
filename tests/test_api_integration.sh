@@ -1,13 +1,10 @@
 #!/bin/bash
 
-# =============================================================================
 # ForexGPT - API Integration Test Script
-# Engineer 4 - Database & Integration
-# =============================================================================
 #
 # What this script does:
 #   Walks through the complete ForexGPT flow by hitting real API endpoints,
-#   exactly the same way the frontend would. No mocking, no shortcuts.
+#   exactly the same way the frontend would.
 #
 #   Step 1 → CodeGen generates a strategy
 #   Step 2 → Backtest runs that strategy
@@ -28,19 +25,18 @@ set -e  # Stop the script immediately if any command fails
 
 BASE_URL="http://localhost:8000"
 
-# =============================================================================
-# ✏️  UPDATE THESE TWO VALUES BEFORE RUNNING
-# =============================================================================
+# UPDATE THESE TWO VALUES BEFORE RUNNING
 
 # Your test user's UUID from the profiles table in Supabase
-USER_ID="ceabb23f-ca80-4fd7-a811-40c3a03ad344"
+USER_ID=""
 
 # Your JWT token — get it from browser DevTools after logging into the app:
 #   1. Open the app in your browser and log in
 #   2. Open DevTools → Network tab
 #   3. Click any API request
 #   4. Look for the Authorization header → copy everything after "Bearer "
-TOKEN="eyJhbGciOiJFUzI1NiIsImtpZCI6IjU0ZTRjODZmLTQ4ZjEtNDNmYi05NjMxLWQyNWU3MDYxNTEzYiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL2pjd2h2cmlmbGF1bHBmdnNxdnNrLnN1cGFiYXNlLmNvL2F1dGgvdjEiLCJzdWIiOiJjZWFiYjIzZi1jYTgwLTRmZDctYTgxMS00MGMzYTAzYWQzNDQiLCJhdWQiOiJhdXRoZW50aWNhdGVkIiwiZXhwIjoxNzc0MzUwODkyLCJpYXQiOjE3NzQzNDcyOTIsImVtYWlsIjoibWFzajMzNzMzQGdtYWlsLmNvbSIsInBob25lIjoiIiwiYXBwX21ldGFkYXRhIjp7InByb3ZpZGVyIjoiZW1haWwiLCJwcm92aWRlcnMiOlsiZW1haWwiXX0sInVzZXJfbWV0YWRhdGEiOnsiZW1haWwiOiJtYXNqMzM3MzNAZ21haWwuY29tIiwiZW1haWxfdmVyaWZpZWQiOnRydWUsImZ1bGxfbmFtZSI6IlJveWFsIFRyYWRlciIsInBob25lX3ZlcmlmaWVkIjpmYWxzZSwic3ViIjoiY2VhYmIyM2YtY2E4MC00ZmQ3LWE4MTEtNDBjM2EwM2FkMzQ0In0sInJvbGUiOiJhdXRoZW50aWNhdGVkIiwiYWFsIjoiYWFsMSIsImFtciI6W3sibWV0aG9kIjoicGFzc3dvcmQiLCJ0aW1lc3RhbXAiOjE3NzQzNDM3MTl9XSwic2Vzc2lvbl9pZCI6IjgwYTAzOTcyLWM3YTItNDhjNC1iZDMzLTdlOTlhOWQ3NWRmNyIsImlzX2Fub255bW91cyI6ZmFsc2V9.ANdg0XW86LqjZoaTPVFN9Hy7qjMCetu12kiVZaNJsJRBS-7PvnJd-fmda9qaHlNqWk6BBFQeaINPvr2khXjHoA"
+#   Or get it from your backend authorization token
+TOKEN=""
 
 # =============================================================================
 
@@ -83,7 +79,7 @@ echo "============================================="
 
 # -----------------------------------------------------------------------------
 # Step 1: Ask CodeGen to generate a basic RSI mean reversion strategy.
-# We use jq -n to build the JSON body safely — this handles any special
+# Using jq -n to build the JSON body safely so it handles any special
 # characters in the values automatically without breaking the JSON.
 # -----------------------------------------------------------------------------
 section "Step 1 of 5 — Generating strategy code"
@@ -104,14 +100,14 @@ check_for_error "$CODE_RESPONSE" "CodeGen /generate"
 GENERATED_CODE=$(echo "$CODE_RESPONSE" | jq -r '.code' | tr -d '\r' | tr -d '\000-\010' | tr -d '\013-\037')
 CONV_ID=$(echo "$CODE_RESPONSE"        | jq -r '.conversation_id')
 
-echo "✓ Strategy code generated successfully"
+echo " Strategy code generated successfully"
 echo "  Conversation ID : $CONV_ID"
 echo "  Code length     : ${#GENERATED_CODE} characters"
 
 
 # -----------------------------------------------------------------------------
 # Step 2: Run that generated code through the backtest engine.
-# We strip \r (Windows line endings) from the code before sending —
+# Strip \r (Windows line endings) from the code before sending —
 # Git Bash sometimes adds them and FastAPI rejects the malformed body.
 # -----------------------------------------------------------------------------
 section "Step 2 of 5 — Running backtest on generated strategy"
@@ -149,7 +145,7 @@ WIN_RATE=$(echo "$BACKTEST_RESPONSE"     | jq -r '.win_rate_pct')
 TOTAL_RETURN=$(echo "$BACKTEST_RESPONSE" | jq -r '.total_return_pct')
 TOTAL_TRADES=$(echo "$BACKTEST_RESPONSE" | jq -r '.total_trades')
 
-echo "✓ Backtest completed successfully"
+echo "Backtest completed successfully"
 echo ""
 echo "  Results:"
 echo "    Sharpe Ratio  : $SHARPE"
@@ -161,7 +157,7 @@ echo "    Total Trades  : $TOTAL_TRADES"
 
 # -----------------------------------------------------------------------------
 # Steps 3-5 only run if the strategy performed poorly (Sharpe below 1.0).
-# We use Python for the float comparison since bc is not available on
+# Using Python for the float comparison since bc is not available on
 # Windows Git Bash by default.
 # -----------------------------------------------------------------------------
 if python -c "exit(0 if float('$SHARPE') < 1.0 else 1)"; then
@@ -173,7 +169,6 @@ if python -c "exit(0 if float('$SHARPE') < 1.0 else 1)"; then
 
     # -------------------------------------------------------------------------
     # Step 3: Send the poor backtest results to the Mentor for analysis.
-    # Note: user_id is NOT in the body — the server reads it from the JWT token.
     # -------------------------------------------------------------------------
     section "Step 3 of 5 — Mentor analyzing poor results"
 
@@ -196,7 +191,7 @@ if python -c "exit(0 if float('$SHARPE') < 1.0 else 1)"; then
     ANALYSIS=$(echo "$ANALYSIS_RESPONSE"       | jq -r '.analysis')
     MENTOR_CONV_ID=$(echo "$ANALYSIS_RESPONSE" | jq -r '.conversation_id')
 
-    echo "✓ Mentor analysis received"
+    echo "Mentor analysis received"
     echo "  Conversation ID : $MENTOR_CONV_ID"
     echo "  Analysis length : ${#ANALYSIS} characters"
     echo ""
@@ -207,7 +202,7 @@ if python -c "exit(0 if float('$SHARPE') < 1.0 else 1)"; then
     # -------------------------------------------------------------------------
     # Step 4: Pass original code + backtest results + mentor analysis to
     # CodeGen and ask it to produce an improved version of the strategy.
-    # All values are passed via jq --arg / --argjson so special characters,
+    # jq --arg / --argjson so special characters,
     # newlines, and quotes in the code and analysis are handled safely.
     # -------------------------------------------------------------------------
 
@@ -246,7 +241,7 @@ check_for_error "$IMPROVE_RESPONSE" "CodeGen /improve"
 IMPROVED_CODE=$(echo "$IMPROVE_RESPONSE"    | jq -r '.code')
 IMPROVED_CODE_ID=$(echo "$IMPROVE_RESPONSE" | jq -r '.code_id')
 
-echo "✓ Improved strategy generated"
+echo " Improved strategy generated"
 echo "  Code ID     : $IMPROVED_CODE_ID"
 echo "  Code length : ${#IMPROVED_CODE} characters"
 echo "  (Improved code should be longer than original — improvements were added)"
@@ -289,7 +284,7 @@ echo "  (Improved code should be longer than original — improvements were adde
     IMPROVED_WIN_RATE=$(echo "$IMPROVED_BACKTEST" | jq -r '.win_rate_pct')
     IMPROVED_RETURN=$(echo "$IMPROVED_BACKTEST"   | jq -r '.total_return_pct')
 
-    echo "✓ Improved backtest completed"
+    echo " Improved backtest completed"
 
 
     # -------------------------------------------------------------------------
@@ -318,6 +313,6 @@ fi
 
 echo ""
 echo "============================================="
-echo "   All steps completed successfully ✓"
+echo "   All steps completed successfully"
 echo "============================================="
 echo ""
