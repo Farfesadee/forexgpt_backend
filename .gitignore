@@ -21,3 +21,5 @@ list_columns.py
 schema_results.txt
 test_output.txt
 test_registration.py
+
+.env
