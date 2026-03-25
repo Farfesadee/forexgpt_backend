@@ -975,3 +975,59 @@ async def start_backtest_conversation(
         return StartBacktestConversationResponse(**result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Streaming endpoint — SSE (text/event-stream)
+# ---------------------------------------------------------------------------
+
+from typing import Optional as _Optional
+from pydantic import BaseModel as _BaseModel
+from fastapi.responses import StreamingResponse
+import json as _json
+
+
+class AskStreamRequest(_BaseModel):
+    message:         str
+    conversation_id: _Optional[str] = None
+
+
+@router.post("/ask/stream")
+async def ask_stream(
+    request: AskStreamRequest,
+    user:    JWTPayload    = Depends(get_current_user),
+    service: MentorService = Depends(get_mentor_service),
+):
+    """
+    Stream an AI mentor response as Server-Sent Events (SSE).
+
+    Request body: { "message": "...", "conversation_id": "..." (optional) }
+
+    Each SSE frame:   data: "json-encoded text chunk"\\n\\n
+    Final frame:      data: [DONE]\\n\\n
+
+    Chunks are JSON-encoded strings so embedded newlines in markdown are safe.
+    """
+
+    async def event_generator():
+        try:
+            async for chunk in service.ask_question_stream(
+                user_id         = user.user_id,
+                message         = request.message,
+                conversation_id = request.conversation_id,
+            ):
+                yield f"data: {_json.dumps(chunk)}\n\n"
+            yield "data: [DONE]\n\n"
+        except Exception as e:
+            yield f"data: {_json.dumps({'error': str(e)})}\n\n"
+            yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control":               "no-cache",
+            "X-Accel-Buffering":           "no",
+            "Access-Control-Allow-Origin": "*",
+        },
+    )

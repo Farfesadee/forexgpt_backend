@@ -1328,4 +1328,96 @@ Performance Metrics:
                     await asyncio.sleep(2 ** attempt)   # 1s, 2s
 
         logger.error(f"All LLM retries failed: {last_error}", exc_info=True)
+        assert last_error is not None
         raise last_error
+
+    # =========================================================================
+    # PUBLIC — streaming ask (yields text chunks, consumed by SSE endpoint)
+    # =========================================================================
+
+    async def ask_question_stream(
+        self,
+        user_id:         str,
+        message:         str,
+        conversation_id: Optional[str] = None,
+    ):
+        """
+        Streaming version of ask_question.
+
+        Yields raw text chunks (str) as they arrive from the Mistral API.
+        After the stream ends the complete response is persisted to the DB.
+        """
+        try:
+            if DEV_MODE:
+                conversation_id  = conversation_id or str(uuid.uuid4())
+                history          = []
+                backtest_context = None
+            elif conversation_id:
+                logger.info(f"[stream] Loading conversation {conversation_id} for user {user_id}")
+                history, backtest_context = await self._load_conversation(conversation_id, user_id)
+                if history is None:
+                    logger.warning(f"[stream] Conversation {conversation_id} not found — starting fresh")
+                    conversation_id = str(uuid.uuid4())
+                    self.db.mentor.create_conversation(
+                        id      = conversation_id,
+                        user_id = user_id,
+                        title   = None,
+                    )
+                    history          = []
+                    backtest_context = None
+            else:
+                logger.info(f"[stream] Creating new conversation for user {user_id}")
+                conversation_id = str(uuid.uuid4())
+                self.db.mentor.create_conversation(
+                    id      = conversation_id,
+                    user_id = user_id,
+                    title   = None,
+                )
+                history          = []
+                backtest_context = None
+
+            # Persist user message before streaming starts
+            if not DEV_MODE:
+                await self._save_message(conversation_id, user_id, role="user", content=message)
+
+            messages = self._build_messages(history, message, backtest_context)
+
+            logger.info(f"[stream] Streaming response for conversation {conversation_id}")
+            full_response = ""
+            async for chunk in self._generate_response_stream(messages, max_tokens=600):
+                full_response += chunk
+                yield chunk
+
+            # Persist complete assistant response after stream ends
+            if not DEV_MODE:
+                await self._save_message(conversation_id, user_id, role="assistant", content=full_response)
+
+            logger.info(f"[stream] Completed for conversation {conversation_id}")
+
+        except Exception as e:
+            logger.error(f"[stream] Error in ask_question_stream: {e}", exc_info=True)
+            raise
+
+    # =========================================================================
+    # PRIVATE — streaming LLM call (no retry — stream reconnect is caller's job)
+    # =========================================================================
+
+    async def _generate_response_stream(
+        self,
+        messages:   List[Dict],
+        max_tokens: int = 600,
+    ):
+        """
+        Call the Mistral API in streaming mode and yield text delta chunks.
+        """
+        async with self.client.chat.stream_async(
+            model       = self.model_id,
+            messages    = messages,
+            max_tokens  = max_tokens,
+            temperature = 0.7,
+            top_p       = 0.9,
+        ) as stream:
+            async for event in stream:
+                choices = event.data.choices
+                if choices and choices[0].delta.content:
+                    yield choices[0].delta.content

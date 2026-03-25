@@ -416,6 +416,20 @@ async def ask_question(
         # )
 
 
+@router.get("/conversations", response_model=list[ConversationSummaryResponse])
+async def list_conversations_for_current_user(
+    limit: int = 20,
+    user: JWTPayload = Depends(get_current_user),
+):
+    try:
+        conversations = await service.list_user_conversations(user.user_id, limit)
+        return conversations
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/conversations/{user_id}", response_model=list[ConversationSummaryResponse])
 async def list_conversations(
     user_id: str,
@@ -426,6 +440,26 @@ async def list_conversations(
         _assert_user_access(user_id, user)
         conversations = await service.list_user_conversations(user_id, limit)
         return conversations
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/conversations/{conversation_id}", response_model=ConversationHistoryResponse)
+async def get_conversation_for_current_user(
+    conversation_id: str,
+    user: JWTPayload = Depends(get_current_user),
+):
+    try:
+        history = await service.get_conversation_history(conversation_id, user.user_id)
+        if history is None:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        return {
+            "conversation_id": conversation_id,
+            "history": history,
+            "message_count": len(history),
+        }
     except HTTPException:
         raise
     except Exception as e:
