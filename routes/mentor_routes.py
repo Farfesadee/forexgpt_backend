@@ -1084,6 +1084,7 @@ from typing import Optional as _Optional
 from pydantic import BaseModel as _BaseModel
 from fastapi.responses import StreamingResponse
 import json as _json
+import uuid as _uuid
 
 
 class AskStreamRequest(_BaseModel):
@@ -1107,13 +1108,14 @@ async def ask_stream(
 
     Chunks are JSON-encoded strings so embedded newlines in markdown are safe.
     """
+    conversation_id = request.conversation_id or str(_uuid.uuid4())
 
     async def event_generator():
         try:
             async for chunk in service.ask_question_stream(
                 user_id         = user.user_id,
                 message         = request.message,
-                conversation_id = request.conversation_id,
+                conversation_id = conversation_id,
             ):
                 yield f"data: {_json.dumps(chunk)}\n\n"
             yield "data: [DONE]\n\n"
@@ -1128,5 +1130,7 @@ async def ask_stream(
             "Cache-Control":               "no-cache",
             "X-Accel-Buffering":           "no",
             "Access-Control-Allow-Origin": "*",
+            "Access-Control-Expose-Headers": "X-Conversation-Id",
+            "X-Conversation-Id":           conversation_id,
         },
     )
