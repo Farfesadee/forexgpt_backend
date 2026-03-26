@@ -18,15 +18,23 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+   allow_origins=[
+    "https://www.forexgpt.com.ng",
+    "http://localhost:5173",        # keep this for local development
+    "http://localhost:4173",        # vite preview default
+    "http://127.0.0.1:4173",        # same machine via IP
+    "http://127.0.0.1:8000",        # local API origin (if frontend uses this)
+    # "http://localhost:3000",        # in case frontend runs on 3000
+],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # Routers
-app.include_router(mentor_router)   # new mentor — replaces api.routes.mentor
+
 app.include_router(auth.router)
+app.include_router(mentor_router)   # new mentor — replaces api.routes.mentor
 app.include_router(signals.router)
 app.include_router(codegen.router)
 app.include_router(backtest.router)

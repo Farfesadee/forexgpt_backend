@@ -1,0 +1,56 @@
+# ============================================================
+# .dockerignore — ForexGPT Backend
+# Tells Docker which files/folders to EXCLUDE from the image
+# Keeps the image small and prevents secrets from leaking
+# ============================================================
+
+# Virtual environment — never include, Docker installs its own
+.fxgptbackendenv/
+venv/
+env/
+.env/
+
+# Environment file — injected by docker-compose at runtime
+# NEVER bake .env into the image
+.env
+.env.*
+
+# Python cache — not needed in production
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+*.pyo
+
+# Test files — not needed in production image
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Development tools — not needed in production
+.vscode/
+.idea/
+*.code-workspace
+
+# Git files — not needed in production
+.git/
+.gitignore
+.gitattributes
+
+# Documentation — not needed in production
+README.md
+*.md
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/

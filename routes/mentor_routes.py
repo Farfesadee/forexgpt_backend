@@ -858,8 +858,6 @@ def _assert_user_access(requested_user_id: str, user: JWTPayload) -> None:
             status_code=403,
             detail="You can only access mentor conversations for your own account.",
         )
-
-
 # ---------------------------------------------------------------------------
 # Generic conversation endpoints
 # ---------------------------------------------------------------------------
@@ -904,13 +902,17 @@ async def ask_question(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/ask", response_model=AskQuestionResponse, include_in_schema=False)
-async def ask_question_legacy(
-    request:         AskQuestionRequest,
-    user:            JWTPayload    = Depends(get_current_user),
-    service:         MentorService = Depends(get_mentor_service),
+@router.post("/ask", response_model=AskQuestionResponse)
+async def ask_question_simple(
+    request: AskQuestionRequest,
+    user:    JWTPayload    = Depends(get_current_user),
+    service: MentorService = Depends(get_mentor_service),
 ):
-    """Legacy frontend endpoint. Starts or continues a conversation."""
+    """
+    Compatibility endpoint for clients calling POST /mentor/ask.
+    If conversation_id is provided, it continues that conversation.
+    Otherwise, a new conversation is created.
+    """
     try:
         result = await service.ask_question(
             user_id         = user.user_id,
@@ -992,8 +994,6 @@ async def get_conversation_history_user_scoped_legacy(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
 @router.get("/conversations", response_model=list[ConversationSummaryResponse])
 async def list_conversations(
     limit:   int           = 20,
@@ -1050,8 +1050,6 @@ async def delete_conversation_user_scoped_legacy(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
 # ---------------------------------------------------------------------------
 # Backtest-seeded conversation
 # ---------------------------------------------------------------------------
