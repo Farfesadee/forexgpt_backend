@@ -852,6 +852,14 @@ from api.middleware.auth_middleware import get_current_user
 router = APIRouter(prefix="/mentor", tags=["mentor"])
 
 
+def _assert_user_access(requested_user_id: str, user: JWTPayload) -> None:
+    if requested_user_id != user.user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only access mentor conversations for your own account.",
+        )
+
+
 # ---------------------------------------------------------------------------
 # Generic conversation endpoints
 # ---------------------------------------------------------------------------
@@ -896,6 +904,24 @@ async def ask_question(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/ask", response_model=AskQuestionResponse, include_in_schema=False)
+async def ask_question_legacy(
+    request:         AskQuestionRequest,
+    user:            JWTPayload    = Depends(get_current_user),
+    service:         MentorService = Depends(get_mentor_service),
+):
+    """Legacy frontend endpoint. Starts or continues a conversation."""
+    try:
+        result = await service.ask_question(
+            user_id         = user.user_id,
+            message         = request.message,
+            conversation_id = request.conversation_id,
+        )
+        return AskQuestionResponse(**result)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/conversations/{conversation_id}/messages", response_model=ConversationHistoryResponse)
 async def get_conversation_history(
     conversation_id: str,
@@ -907,6 +933,56 @@ async def get_conversation_history(
         history = await service.get_conversation_history(conversation_id, user.user_id)
         if history is None:
             raise HTTPException(status_code=404, detail="Conversation not found or unauthorized.")
+        return ConversationHistoryResponse(
+            conversation_id = conversation_id,
+            history         = [ConversationMessageResponse(**m) for m in history],
+            message_count   = len(history),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/conversations/{conversation_id}", response_model=ConversationHistoryResponse, include_in_schema=False)
+async def get_conversation_history_legacy(
+    conversation_id: str,
+    user:            JWTPayload    = Depends(get_current_user),
+    service:         MentorService = Depends(get_mentor_service),
+):
+    """
+    Legacy frontend endpoint.
+    Returns an empty history for a brand-new conversation id instead of failing the page.
+    """
+    try:
+        history = await service.get_conversation_history(conversation_id, user.user_id)
+        if history is None:
+            history = []
+        return ConversationHistoryResponse(
+            conversation_id = conversation_id,
+            history         = [ConversationMessageResponse(**m) for m in history],
+            message_count   = len(history),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/conversations/{user_id}/{conversation_id}", response_model=ConversationHistoryResponse, include_in_schema=False)
+async def get_conversation_history_user_scoped_legacy(
+    conversation_id: str,
+    user_id:         str,
+    user:            JWTPayload    = Depends(get_current_user),
+    service:         MentorService = Depends(get_mentor_service),
+):
+    """
+    Legacy frontend endpoint with user_id in the path.
+    Returns an empty history for a brand-new conversation id instead of failing the page.
+    """
+    try:
+        _assert_user_access(user_id, user)
+        history = await service.get_conversation_history(conversation_id, user.user_id)
+        if history is None:
+            history = []
         return ConversationHistoryResponse(
             conversation_id = conversation_id,
             history         = [ConversationMessageResponse(**m) for m in history],
@@ -940,6 +1016,29 @@ async def delete_conversation(
 ):
     """Delete a conversation and all its messages."""
     try:
+        deleted = await service.delete_conversation(conversation_id, user.user_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Conversation not found or unauthorized.")
+        return DeleteConversationResponse(
+            message         = "Conversation deleted successfully.",
+            conversation_id = conversation_id,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/conversations/{user_id}/{conversation_id}", response_model=DeleteConversationResponse, include_in_schema=False)
+async def delete_conversation_user_scoped_legacy(
+    conversation_id: str,
+    user_id:         str,
+    user:            JWTPayload    = Depends(get_current_user),
+    service:         MentorService = Depends(get_mentor_service),
+):
+    """Legacy frontend endpoint with user_id in the path."""
+    try:
+        _assert_user_access(user_id, user)
         deleted = await service.delete_conversation(conversation_id, user.user_id)
         if not deleted:
             raise HTTPException(status_code=404, detail="Conversation not found or unauthorized.")
@@ -1030,4 +1129,4 @@ async def ask_stream(
             "X-Accel-Buffering":           "no",
             "Access-Control-Allow-Origin": "*",
         },
-    )
+    )

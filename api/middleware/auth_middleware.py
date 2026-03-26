@@ -29,6 +29,8 @@ from typing import Optional
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt, ExpiredSignatureError
+import jwt as pyjwt
+from jwt import PyJWKClient
 from supabase import create_client
 from core.config import settings
 from models.user import JWTPayload
@@ -37,6 +39,69 @@ logger = logging.getLogger(__name__)
 
 # FastAPI dependency that extracts Bearer token from Authorization header
 _bearer_scheme = HTTPBearer(auto_error=False)
+_jwks_client: Optional[PyJWKClient] = None
+
+
+def _to_jwt_payload(claims: dict, fallback_sub: str = "", fallback_email: str = "") -> JWTPayload:
+    now = int(time.time())
+    aud = claims.get("aud", "authenticated")
+    if isinstance(aud, list):
+        aud = aud[0] if aud else "authenticated"
+
+    return JWTPayload(
+        sub=claims.get("sub", fallback_sub),
+        email=claims.get("email") or fallback_email or "",
+        role=claims.get("role", "authenticated"),
+        exp=int(claims.get("exp", now + 3600)),
+        iat=int(claims.get("iat", now)),
+        aud=aud,
+    )
+
+
+def _get_jwks_client() -> PyJWKClient:
+    global _jwks_client
+    if _jwks_client is None:
+        jwks_url = f"{settings.SUPABASE_URL.rstrip('/')}/auth/v1/.well-known/jwks.json"
+        _jwks_client = PyJWKClient(
+            jwks_url,
+            cache_keys=True,
+            cache_jwk_set=True,
+            lifespan=300,
+            timeout=5,
+        )
+    return _jwks_client
+
+
+def _verify_with_jwks(token: str, alg: str) -> JWTPayload:
+    """
+    Verify asymmetric Supabase access tokens against the project's JWKS.
+    This keeps authentication local after the first key fetch.
+    """
+    try:
+        signing_key = _get_jwks_client().get_signing_key_from_jwt(token)
+        claims = pyjwt.decode(
+            token,
+            signing_key.key,
+            algorithms=[alg],
+            audience="authenticated",
+            options={"verify_aud": True},
+        )
+        return _to_jwt_payload(claims)
+    except pyjwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has expired. Please log in again.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"JWKS token verification failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 def _verify_with_supabase(token: str) -> JWTPayload:
     """
@@ -76,13 +141,10 @@ def _verify_with_supabase(token: str) -> JWTPayload:
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    return JWTPayload(
-        sub=claims.get("sub", res.user.id),
-        email=claims.get("email") or getattr(res.user, "email", "") or "",
-        role=claims.get("role", "authenticated"),
-        exp=int(claims.get("exp", now + 3600)),
-        iat=int(claims.get("iat", now)),
-        aud=claims.get("aud", "authenticated"),
+    return _to_jwt_payload(
+        claims,
+        fallback_sub=res.user.id,
+        fallback_email=getattr(res.user, "email", "") or "",
     )
 
 # Core Verification 
@@ -96,17 +158,31 @@ def _verify_jwt(token: str) -> JWTPayload:
     Raises HTTPException on any verification failure.
     """
     try:
+        if not settings.SUPABASE_JWT_SECRET:
+            logger.info("SUPABASE_JWT_SECRET not configured; using Supabase introspection.")
+            return _verify_with_supabase(token)
+
         try:
             header = jwt.get_unverified_header(token)
             alg = (header or {}).get("alg", "")
         except Exception:
             alg = ""
 
-        # Supabase may issue asymmetric JWTs (e.g. RS256) depending on project config.
-        # For any non-HS256 token, verify with Supabase directly.
+        # Supabase may issue asymmetric JWTs (e.g. RS256).
+        # Verify those against the project's JWKS instead of calling get_user().
         if alg and alg.upper() != "HS256":
-            logger.info(f"JWT alg={alg}; using Supabase introspection.")
-            return _verify_with_supabase(token)
+            logger.info(f"JWT alg={alg}; verifying with Supabase JWKS.")
+            try:
+                return _verify_with_jwks(token, alg)
+            except HTTPException as jwks_error:
+                logger.info(
+                    f"JWKS verification failed for alg={alg}; "
+                    "falling back to Supabase introspection."
+                )
+                try:
+                    return _verify_with_supabase(token)
+                except HTTPException:
+                    raise jwks_error
 
         payload = jwt.decode(
             token,
@@ -135,8 +211,20 @@ def _verify_jwt(token: str) -> JWTPayload:
     except JWTError as e:
         err = str(e).lower()
         if "alg value is not allowed" in err:
-            logger.info("JWT uses non-HS256 algorithm; falling back to Supabase introspection.")
-            return _verify_with_supabase(token)
+            logger.info("JWT uses non-HS256 algorithm; verifying with Supabase JWKS.")
+            try:
+                header = jwt.get_unverified_header(token)
+                alg = (header or {}).get("alg", "RS256")
+            except Exception:
+                alg = "RS256"
+            try:
+                return _verify_with_jwks(token, alg)
+            except HTTPException as jwks_error:
+                logger.info("JWKS verification failed; falling back to Supabase introspection.")
+                try:
+                    return _verify_with_supabase(token)
+                except HTTPException:
+                    raise jwks_error
 
         logger.warning(f"JWT verification failed: {e}")
         raise HTTPException(
@@ -147,8 +235,20 @@ def _verify_jwt(token: str) -> JWTPayload:
     except Exception as e:
         err = str(e).lower()
         if "alg value is not allowed" in err:
-            logger.info("JWT uses non-HS256 algorithm; falling back to Supabase introspection.")
-            return _verify_with_supabase(token)
+            logger.info("JWT uses non-HS256 algorithm; verifying with Supabase JWKS.")
+            try:
+                header = jwt.get_unverified_header(token)
+                alg = (header or {}).get("alg", "RS256")
+            except Exception:
+                alg = "RS256"
+            try:
+                return _verify_with_jwks(token, alg)
+            except HTTPException as jwks_error:
+                logger.info("JWKS verification failed; falling back to Supabase introspection.")
+                try:
+                    return _verify_with_supabase(token)
+                except HTTPException:
+                    raise jwks_error
         logger.warning(f"JWT verification failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
