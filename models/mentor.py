@@ -1023,7 +1023,7 @@ class AskQuestionRequest(BaseModel):
     })
 
     message: str = Field(..., min_length=3, max_length=2000)
-    user_id: Optional[str] = None,
+    user_id: Optional[str] = None
     conversation_id: Optional[str] = None
 
 

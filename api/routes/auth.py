@@ -39,7 +39,10 @@ Supabase dashboard requirements (fix before testing):
 """
 
 import logging
-from fastapi import APIRouter, Depends, HTTPException, status
+from urllib.parse import urlencode
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import RedirectResponse
 from supabase import create_client, Client
 
 from core.config import settings
@@ -89,12 +92,24 @@ def _build_user_profile(raw: dict) -> UserProfile:
         updated_at=raw["updated_at"],
     )
 
+
+def _frontend_url(path: str, **query_params) -> str:
+    base = settings.SITE_URL.rstrip("/")
+    query = urlencode({k: v for k, v in query_params.items() if v is not None})
+    return f"{base}{path}" + (f"?{query}" if query else "")
+
 # Registration section
 @router.post(
     "/register",
     response_model=RegisterResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Register a new user account",
+)
+@router.post(
+    "/auth/register",
+    response_model=RegisterResponse,
+    status_code=status.HTTP_201_CREATED,
+    include_in_schema=False,
 )
 async def register(body: RegisterRequest):
     """
@@ -109,6 +124,13 @@ async def register(body: RegisterRequest):
     - User must confirm email before logging in (if confirmations are enabled)
     """
     supabase = _auth_client()
+
+    existing_profile = db.profiles.get_by_email(body.email)
+    if existing_profile is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An account with this email already exists.",
+        )
 
     try:
         res = supabase.auth.sign_up({
@@ -152,6 +174,11 @@ async def register(body: RegisterRequest):
     "/confirm",
     response_model=LoginResponse,
     summary="Confirm email address and complete registration",
+)
+@router.post(
+    "/auth/confirm",
+    response_model=LoginResponse,
+    include_in_schema=False,
 )
 async def confirm_email(body: "EmailConfirmRequest"):
     """
@@ -243,11 +270,24 @@ async def confirm_email(body: "EmailConfirmRequest"):
     )
 
 
+@router.get("/auth/confirm", include_in_schema=False)
+async def confirm_email_redirect(request: Request):
+    return RedirectResponse(
+        url=_frontend_url("/auth/confirm", **dict(request.query_params)),
+        status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+    )
+
+
 # Resend Confirmation Email 
 @router.post(
     "/resend-confirmation",
     status_code=status.HTTP_200_OK,
     summary="Resend the email confirmation link",
+)
+@router.post(
+    "/auth/resend-confirmation",
+    status_code=status.HTTP_200_OK,
+    include_in_schema=False,
 )
 async def resend_confirmation(body: PasswordResetRequest):
     """
@@ -290,6 +330,11 @@ async def resend_confirmation(body: PasswordResetRequest):
     "/login",
     response_model=LoginResponse,
     summary="Login with email and password",
+)
+@router.post(
+    "/auth/login",
+    response_model=LoginResponse,
+    include_in_schema=False,
 )
 async def login(body: LoginRequest):
     """
@@ -350,6 +395,11 @@ async def login(body: LoginRequest):
     response_model=LogoutResponse,
     summary="Log out and invalidate the current session",
 )
+@router.post(
+    "/auth/logout",
+    response_model=LogoutResponse,
+    include_in_schema=False,
+)
 async def logout(user: JWTPayload = Depends(get_current_user)):
     """
     Signs the user out of the current session.
@@ -379,6 +429,11 @@ async def logout(user: JWTPayload = Depends(get_current_user)):
     "/refresh",
     response_model=TokenPair,
     summary="Exchange a refresh token for a new access token",
+)
+@router.post(
+    "/auth/refresh",
+    response_model=TokenPair,
+    include_in_schema=False,
 )
 async def refresh_token(body: RefreshRequest):
     """
@@ -412,6 +467,11 @@ async def refresh_token(body: RefreshRequest):
     status_code=status.HTTP_200_OK,
     summary="Send a password reset email",
 )
+@router.post(
+    "/auth/password-reset",
+    status_code=status.HTTP_200_OK,
+    include_in_schema=False,
+)
 async def request_password_reset(body: PasswordResetRequest):
     """
     Sends a password reset link to the given email address.
@@ -434,11 +494,24 @@ async def request_password_reset(body: PasswordResetRequest):
 
     return {"message": "If an account exists with that email, a reset link has been sent."}
 
+
+@router.get("/auth/reset-password", include_in_schema=False)
+async def password_reset_redirect(request: Request):
+    return RedirectResponse(
+        url=_frontend_url("/auth/reset-password", **dict(request.query_params)),
+        status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+    )
+
 # Password Update Section (after reset flow)
 @router.post(
     "/password-update",
     status_code=status.HTTP_200_OK,
     summary="Set a new password (requires valid session from reset link)",
+)
+@router.post(
+    "/auth/password-update",
+    status_code=status.HTTP_200_OK,
+    include_in_schema=False,
 )
 async def update_password(
     body: PasswordUpdateRequest,
@@ -520,6 +593,11 @@ async def oauth_callback(provider: str, body: OAuthCallbackRequest):
     response_model=UserProfile,
     summary="Get the current user's profile",
 )
+@router.get(
+    "/auth/me",
+    response_model=UserProfile,
+    include_in_schema=False,
+)
 async def get_me(user: JWTPayload = Depends(get_current_user)):
     """
     Returns the authenticated user's profile from public.profiles.
@@ -538,6 +616,11 @@ async def get_me(user: JWTPayload = Depends(get_current_user)):
     "/me",
     response_model=ProfileUpdateResponse,
     summary="Update the current user's profile",
+)
+@router.patch(
+    "/auth/me",
+    response_model=ProfileUpdateResponse,
+    include_in_schema=False,
 )
 async def update_me(
     body: ProfileUpdateRequest,
@@ -590,6 +673,11 @@ async def update_me(
     response_model=UserDashboard,
     summary="Get aggregated usage stats across all 5 modules",
 )
+@router.get(
+    "/auth/me/dashboard",
+    response_model=UserDashboard,
+    include_in_schema=False,
+)
 async def get_dashboard(user: JWTPayload = Depends(get_current_user)):
     """
     Returns the user's dashboard — aggregated statistics from the
@@ -616,6 +704,11 @@ async def get_dashboard(user: JWTPayload = Depends(get_current_user)):
     response_model=list[ActivityLogItem],
     summary="Get recent activity log entries for the current user",
 )
+@router.get(
+    "/auth/activity",
+    response_model=list[ActivityLogItem],
+    include_in_schema=False,
+)
 async def get_activity(
     limit: int = 20,
     user: JWTPayload = Depends(get_current_user),
@@ -631,6 +724,10 @@ async def get_activity(
 @router.get(
     "/session",
     summary="Verify the current token is valid",
+)
+@router.get(
+    "/auth/session",
+    include_in_schema=False,
 )
 async def check_session(user: JWTPayload = Depends(get_current_user)):
     """

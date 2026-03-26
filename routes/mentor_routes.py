@@ -852,6 +852,12 @@ from api.middleware.auth_middleware import get_current_user
 router = APIRouter(prefix="/mentor", tags=["mentor"])
 
 
+def _assert_user_access(requested_user_id: str, user: JWTPayload) -> None:
+    if requested_user_id != user.user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only access mentor conversations for your own account.",
+        )
 # ---------------------------------------------------------------------------
 # Generic conversation endpoints
 # ---------------------------------------------------------------------------
@@ -940,6 +946,54 @@ async def get_conversation_history(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/conversations/{conversation_id}", response_model=ConversationHistoryResponse, include_in_schema=False)
+async def get_conversation_history_legacy(
+    conversation_id: str,
+    user:            JWTPayload    = Depends(get_current_user),
+    service:         MentorService = Depends(get_mentor_service),
+):
+    """
+    Legacy frontend endpoint.
+    Returns an empty history for a brand-new conversation id instead of failing the page.
+    """
+    try:
+        history = await service.get_conversation_history(conversation_id, user.user_id)
+        if history is None:
+            history = []
+        return ConversationHistoryResponse(
+            conversation_id = conversation_id,
+            history         = [ConversationMessageResponse(**m) for m in history],
+            message_count   = len(history),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/conversations/{user_id}/{conversation_id}", response_model=ConversationHistoryResponse, include_in_schema=False)
+async def get_conversation_history_user_scoped_legacy(
+    conversation_id: str,
+    user_id:         str,
+    user:            JWTPayload    = Depends(get_current_user),
+    service:         MentorService = Depends(get_mentor_service),
+):
+    """
+    Legacy frontend endpoint with user_id in the path.
+    Returns an empty history for a brand-new conversation id instead of failing the page.
+    """
+    try:
+        _assert_user_access(user_id, user)
+        history = await service.get_conversation_history(conversation_id, user.user_id)
+        if history is None:
+            history = []
+        return ConversationHistoryResponse(
+            conversation_id = conversation_id,
+            history         = [ConversationMessageResponse(**m) for m in history],
+            message_count   = len(history),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 @router.get("/conversations", response_model=list[ConversationSummaryResponse])
 async def list_conversations(
     limit:   int           = 20,
@@ -975,6 +1029,27 @@ async def delete_conversation(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.delete("/conversations/{user_id}/{conversation_id}", response_model=DeleteConversationResponse, include_in_schema=False)
+async def delete_conversation_user_scoped_legacy(
+    conversation_id: str,
+    user_id:         str,
+    user:            JWTPayload    = Depends(get_current_user),
+    service:         MentorService = Depends(get_mentor_service),
+):
+    """Legacy frontend endpoint with user_id in the path."""
+    try:
+        _assert_user_access(user_id, user)
+        deleted = await service.delete_conversation(conversation_id, user.user_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Conversation not found or unauthorized.")
+        return DeleteConversationResponse(
+            message         = "Conversation deleted successfully.",
+            conversation_id = conversation_id,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 # ---------------------------------------------------------------------------
 # Backtest-seeded conversation
 # ---------------------------------------------------------------------------
@@ -1007,6 +1082,7 @@ from typing import Optional as _Optional
 from pydantic import BaseModel as _BaseModel
 from fastapi.responses import StreamingResponse
 import json as _json
+import uuid as _uuid
 
 
 class AskStreamRequest(_BaseModel):
@@ -1030,13 +1106,14 @@ async def ask_stream(
 
     Chunks are JSON-encoded strings so embedded newlines in markdown are safe.
     """
+    conversation_id = request.conversation_id or str(_uuid.uuid4())
 
     async def event_generator():
         try:
             async for chunk in service.ask_question_stream(
                 user_id         = user.user_id,
                 message         = request.message,
-                conversation_id = request.conversation_id,
+                conversation_id = conversation_id,
             ):
                 yield f"data: {_json.dumps(chunk)}\n\n"
             yield "data: [DONE]\n\n"
@@ -1051,5 +1128,7 @@ async def ask_stream(
             "Cache-Control":               "no-cache",
             "X-Accel-Buffering":           "no",
             "Access-Control-Allow-Origin": "*",
+            "Access-Control-Expose-Headers": "X-Conversation-Id",
+            "X-Conversation-Id":           conversation_id,
         },
     )

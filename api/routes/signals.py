@@ -39,7 +39,6 @@ from models.user import JWTPayload
 from typing import Optional
 
 router = APIRouter(prefix="/signals", tags=["signals"])
-service = get_signal_service()
 
 def _assert_user_access(requested_user_id: str, user: JWTPayload) -> None:
     if requested_user_id != user.user_id:
@@ -53,6 +52,7 @@ def _assert_user_access(requested_user_id: str, user: JWTPayload) -> None:
 async def extract_signal(
     request: ExtractSignalRequest,
     user: JWTPayload = Depends(get_current_user),
+    service = Depends(get_signal_service),
 ):
     try:
         if request.user_id and request.user_id != user.user_id:
@@ -81,6 +81,7 @@ async def extract_signal(
 async def batch_extract(
     request: BatchExtractRequest,
     user: JWTPayload = Depends(get_current_user),
+    service = Depends(get_signal_service),
 ):
     try:
         if request.user_id and request.user_id != user.user_id:
@@ -111,6 +112,7 @@ async def get_user_signals(
     currency_pair: Optional[str] = None,
     direction: Optional[str] = None,
     user: JWTPayload = Depends(get_current_user),
+    service = Depends(get_signal_service),
 ):
     try:
         _assert_user_access(user_id, user)
@@ -132,6 +134,7 @@ async def get_signal(
     signal_id: str,
     user_id: str,
     user: JWTPayload = Depends(get_current_user),
+    service = Depends(get_signal_service),
 ):
     try:
         _assert_user_access(user_id, user)
@@ -149,6 +152,7 @@ async def get_signal(
 async def get_statistics(
     user_id: str,
     user: JWTPayload = Depends(get_current_user),
+    service = Depends(get_signal_service),
 ):
     try:
         _assert_user_access(user_id, user)
@@ -180,6 +184,7 @@ async def delete_signal(
     signal_id: str,
     user_id: str,
     user: JWTPayload = Depends(get_current_user),
+    service = Depends(get_signal_service),
 ):
     try:
         _assert_user_access(user_id, user)

@@ -727,10 +727,15 @@ from models.mentor import BacktestContext
 logger = logging.getLogger(__name__)
 
 DEV_MODE = os.getenv("DEV_MODE", "false").lower() == "true"
+CONTEXT_MESSAGE_ROLES = {"system", "system_context"}
 
 
 def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _is_context_role(role: str) -> bool:
+    return role in CONTEXT_MESSAGE_ROLES
 
 
 class MentorService:
@@ -882,6 +887,13 @@ class MentorService:
                     )
                     history          = []
                     backtest_context = None
+                elif not history:
+                    logger.info(f"Creating conversation shell for provided id {conversation_id}")
+                    self.db.mentor.create_conversation(
+                        id      = conversation_id,
+                        user_id = user_id,
+                        title   = None,
+                    )
             else:
                 logger.info(f"Creating new generic conversation for user {user_id}")
                 conversation_id = str(uuid.uuid4())
@@ -904,7 +916,7 @@ class MentorService:
                 await self._save_message(conversation_id, user_id, role="user",      content=message)
                 await self._save_message(conversation_id, user_id, role="assistant", content=response)
 
-            message_count = len([m for m in history if m["role"] != "system"]) + 2
+            message_count = len([m for m in history if not _is_context_role(m["role"])]) + 2
 
             logger.info(f"Response generated for conversation {conversation_id}")
             return {
@@ -1033,7 +1045,8 @@ Important: Start your response directly with the analysis. Do not repeat or refo
                     "timestamp": msg.get("timestamp", ""),
                 }
                 for msg in history
-                if msg["role"] != "system"
+                if not _is_context_role(msg["role"])
+                if not _is_context_role(msg["role"])
             ]
         except Exception as e:
             logger.error(f"Error retrieving conversation history: {e}", exc_info=True)
@@ -1050,7 +1063,7 @@ Important: Start your response directly with the analysis. Do not repeat or refo
 
             conversations = []
             for row in rows:
-                is_backtest   = row.get("role") == "system"
+                is_backtest   = _is_context_role(row.get("role", ""))
                 preview       = row.get("last_response_preview") or row.get("content", "")
 
                 if is_backtest:
@@ -1268,7 +1281,7 @@ Performance Metrics:
         backtest_context: Optional[BacktestContext] = None
 
         for msg in rows:
-            if msg["role"] == "system":
+            if _is_context_role(msg["role"]):
                 try:
                     backtest_context = BacktestContext(**json.loads(msg["content"]))
                 except Exception:
@@ -1370,6 +1383,13 @@ Performance Metrics:
                     )
                     history          = []
                     backtest_context = None
+                elif not history:
+                    logger.info(f"[stream] Creating conversation shell for provided id {conversation_id}")
+                    self.db.mentor.create_conversation(
+                        id      = conversation_id,
+                        user_id = user_id,
+                        title   = None,
+                    )
             else:
                 logger.info(f"[stream] Creating new conversation for user {user_id}")
                 conversation_id = str(uuid.uuid4())

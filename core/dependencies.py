@@ -549,18 +549,30 @@ core/dependencies.py
 FastAPI dependency injection factory.
 """
 
-from core.hf_client import mistral_client, hf_client
+from fastapi import HTTPException, status
+
 from core.database import db
 from core.config import settings
+from core.hf_client import get_mistral_client
 from services.mentor_service import MentorService
 from services.codegen_service import CodeGenService
 from services.signal_service import SignalService
 from services.backtest_service import BacktestService
 
 
+def _require_mistral_client():
+    try:
+        return get_mistral_client()
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+
+
 def get_mentor_service() -> MentorService:
     return MentorService(
-        mistral_client = mistral_client,
+        mistral_client = _require_mistral_client(),
         db             = db,
         model_id       = settings.MISTRAL_MODEL_ID,
     )
@@ -568,14 +580,14 @@ def get_mentor_service() -> MentorService:
 
 def get_codegen_service() -> CodeGenService:
     return CodeGenService(
-        mistral_client=mistral_client,
+        mistral_client=_require_mistral_client(),
         model_id=settings.MISTRAL_MODEL_ID,
     )
 
 
 def get_signal_service() -> SignalService:
     return SignalService(
-        mistral_client=mistral_client,
+        mistral_client=_require_mistral_client(),
         model_id=settings.SIGNAL_MODEL_ID,
     )
 
