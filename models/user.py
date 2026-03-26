@@ -56,6 +56,11 @@ class PasswordResetRequest(BaseModel):
 class PasswordUpdateRequest(BaseModel):
     """Used after clicking the reset link — Supabase sends the user back with a token."""
     new_password: str = Field(..., min_length=8, max_length=128)
+    refresh_token: Optional[str] = Field(
+        default=None,
+        min_length=10,
+        description="Supabase refresh token from the recovery session.",
+    )
 
     @field_validator("new_password")
     @classmethod

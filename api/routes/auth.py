@@ -472,6 +472,26 @@ async def refresh_token(body: RefreshRequest):
     status_code=status.HTTP_200_OK,
     include_in_schema=False,
 )
+@router.post(
+    "/forgot-password",
+    status_code=status.HTTP_200_OK,
+    include_in_schema=False,
+)
+@router.post(
+    "/auth/forgot-password",
+    status_code=status.HTTP_200_OK,
+    include_in_schema=False,
+)
+@router.post(
+    "/request-password-reset",
+    status_code=status.HTTP_200_OK,
+    include_in_schema=False,
+)
+@router.post(
+    "/password/forgot",
+    status_code=status.HTTP_200_OK,
+    include_in_schema=False,
+)
 async def request_password_reset(body: PasswordResetRequest):
     """
     Sends a password reset link to the given email address.
@@ -515,6 +535,7 @@ async def password_reset_redirect(request: Request):
 )
 async def update_password(
     body: PasswordUpdateRequest,
+    request: Request,
     user: JWTPayload = Depends(get_current_user),
 ):
     """
@@ -525,8 +546,28 @@ async def update_password(
     and calls this endpoint.
     """
     supabase = _auth_client()
+    auth_header = request.headers.get("authorization", "")
+    access_token = auth_header.split(" ", 1)[1].strip() if auth_header.lower().startswith("bearer ") else ""
+    refresh_token = body.refresh_token or request.headers.get("x-refresh-token")
+
+    if not access_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authorization header required. Use: Bearer <token>",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if not refresh_token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Refresh token required to update password. "
+                "Send it in the request body as `refresh_token` or header `X-Refresh-Token`."
+            ),
+        )
 
     try:
+        supabase.auth.set_session(access_token, refresh_token)
         supabase.auth.update_user({"password": body.new_password})
     except Exception as e:
         _handle_supabase_auth_error(e, "password update")
