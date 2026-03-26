@@ -509,8 +509,9 @@ async def request_password_reset(body: PasswordResetRequest):
             options={"redirect_to": f"{settings.SITE_URL}/auth/reset-password"},
         )
     except Exception as e:
-        # Log but don't reveal to caller
         logger.warning(f"Password reset error for {body.email}: {e}")
+        if settings.APP_ENV.lower() != "production":
+            _handle_supabase_auth_error(e, "password reset")
 
     return {"message": "If an account exists with that email, a reset link has been sent."}
 

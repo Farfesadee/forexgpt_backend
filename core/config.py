@@ -4,6 +4,8 @@ from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
+    APP_ENV: str = "development"
+
     # Mistral (for mentor and codegen services)
     MISTRAL_API_KEY: Optional[str] = None
     
