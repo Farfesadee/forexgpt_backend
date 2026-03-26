@@ -36,7 +36,6 @@ from api.middleware.auth_middleware import get_current_user
 from models.user import JWTPayload
 
 router = APIRouter(prefix="/codegen", tags=["codegen"])
-service = get_codegen_service()
 
 def _assert_user_access(requested_user_id: str, user: JWTPayload) -> None:
     if requested_user_id != user.user_id:
@@ -50,6 +49,7 @@ def _assert_user_access(requested_user_id: str, user: JWTPayload) -> None:
 async def generate_code(
     request: GenerateCodeRequest,
     user: JWTPayload = Depends(get_current_user),
+    service = Depends(get_codegen_service),
 ):
     try:
         if request.user_id and request.user_id != user.user_id:
@@ -80,6 +80,7 @@ async def list_generated_codes(
     user_id: str,
     limit: int = 20,
     user: JWTPayload = Depends(get_current_user),
+    service = Depends(get_codegen_service),
 ):
     try:
         _assert_user_access(user_id, user)
@@ -96,6 +97,7 @@ async def get_generated_code(
     code_id: str,
     user_id: str,
     user: JWTPayload = Depends(get_current_user),
+    service = Depends(get_codegen_service),
 ):
     try:
         _assert_user_access(user_id, user)
@@ -114,6 +116,7 @@ async def get_conversation(
     conversation_id: str,
     user_id: str,
     user: JWTPayload = Depends(get_current_user),
+    service = Depends(get_codegen_service),
 ):
     try:
         _assert_user_access(user_id, user)
@@ -133,6 +136,7 @@ async def get_conversation(
 async def improve_strategy(
     request: ImproveStrategyRequest,
     user: JWTPayload = Depends(get_current_user),
+    service = Depends(get_codegen_service),
 ):
     try:
         if request.user_id and request.user_id != user.user_id:
@@ -159,6 +163,7 @@ async def delete_conversation(
     conversation_id: str,
     user_id: str,
     user: JWTPayload = Depends(get_current_user),
+    service = Depends(get_codegen_service),
 ):
     try:
         _assert_user_access(user_id, user)

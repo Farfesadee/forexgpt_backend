@@ -47,6 +47,10 @@ class ProfilesRepo:
     def get(self, user_id: str) -> dict:
         return self._t.select("*").eq("id", user_id).single().execute().data
 
+    def get_by_email(self, email: str) -> Optional[dict]:
+        rows = self._t.select("*").eq("email", email).limit(1).execute().data
+        return rows[0] if rows else None
+
     def create(self, data: dict) -> dict:
         return self._t.insert(data).execute().data[0]
 
