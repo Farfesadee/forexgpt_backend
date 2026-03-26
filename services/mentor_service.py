@@ -1177,6 +1177,8 @@ Important: Start your response directly with the analysis. Do not repeat or refo
             fmt("avg_holding_days",     "Avg Holding Days",    " days"),
             fmt("volatility_annual_pct","Annual Volatility",   "%"),
             fmt("cagr_pct",             "CAGR",                "%"),
+            fmt("calmar_ratio",         "Calmar Ratio"),
+            fmt("expectancy",           "Expectancy"),
         ]
         metrics_str = "\n".join(line for line in metric_lines if line)
 
@@ -1201,7 +1203,10 @@ Use this exact structure:
 - WHY (2-3 bullet points — most important reasons only)
 - NEXT STEPS (2 bullet points — most impactful improvements)
  
-No lengthy explanations. If I want more detail I will ask."""
+No lengthy explanations. If I want more detail I will ask.
+After the initial verdict, answer all follow-up questions with full 
+educational depth — explain metrics, concepts, and theory thoroughly 
+when the user asks for more detail."""
 
     @staticmethod
     def _format_context_for_llm(ctx: BacktestContext) -> str:
@@ -1420,4 +1425,4 @@ Performance Metrics:
             async for event in stream:
                 choices = event.data.choices
                 if choices and choices[0].delta.content:
-                    yield choices[0].delta.content
+                    yield choices[0].delta.content
