@@ -488,6 +488,22 @@ async def get_conversation(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.delete("/conversations/{conversation_id}", response_model=DeleteConversationResponse)
+async def delete_conversation_for_current_user(
+    conversation_id: str,
+    user: JWTPayload = Depends(get_current_user),
+):
+    try:
+        deleted = service.delete_conversation(conversation_id, user.user_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        return {"message": "Conversation deleted successfully", "conversation_id": conversation_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.delete("/conversations/{user_id}/{conversation_id}", response_model=DeleteConversationResponse)
 async def delete_conversation(
     conversation_id: str,

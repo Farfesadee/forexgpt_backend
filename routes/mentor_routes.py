@@ -896,6 +896,28 @@ async def ask_question(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/ask", response_model=AskQuestionResponse)
+async def ask_question_simple(
+    request: AskQuestionRequest,
+    user:    JWTPayload    = Depends(get_current_user),
+    service: MentorService = Depends(get_mentor_service),
+):
+    """
+    Compatibility endpoint for clients calling POST /mentor/ask.
+    If conversation_id is provided, it continues that conversation.
+    Otherwise, a new conversation is created.
+    """
+    try:
+        result = await service.ask_question(
+            user_id         = user.user_id,
+            message         = request.message,
+            conversation_id = request.conversation_id,
+        )
+        return AskQuestionResponse(**result)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/conversations/{conversation_id}/messages", response_model=ConversationHistoryResponse)
 async def get_conversation_history(
     conversation_id: str,
@@ -1030,4 +1052,4 @@ async def ask_stream(
             "X-Accel-Buffering":           "no",
             "Access-Control-Allow-Origin": "*",
         },
-    )
+    )
