@@ -21,7 +21,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("SUPABASE_JWT_SECRET", "JWT_SECRET", "APP_SECRET_KEY"),
     )
     
-    SITE_URL: str = "http://localhost:3000"
+    SITE_URL: str = "http://localhost:5173"
     # Model IDs
     MISTRAL_MODEL_ID: str = "mistral-small-latest"
     SIGNAL_MODEL_ID: str = "forexgpt/forexgpt-mistral-7b-forex-signals-v1.0"
