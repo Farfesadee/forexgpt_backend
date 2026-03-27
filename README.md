@@ -585,7 +585,7 @@ SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 SUPABASE_JWT_SECRET=your-jwt-secret
 
 # Frontend URL — embedded in confirmation and password reset emails
-SITE_URL=http://localhost:3000
+SITE_URL=http://localhost:5173
 ```
 
 Find these values at: **Supabase Dashboard → Project Settings → API**

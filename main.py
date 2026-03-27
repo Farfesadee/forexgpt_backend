@@ -13,7 +13,8 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="ForexGPT API",
-    version="1.0.0"
+    version="1.0.0",
+    redirect_slashes=False
 )
 
 app.add_middleware(
@@ -24,7 +25,7 @@ app.add_middleware(
     "http://localhost:4173",        # vite preview default
     "http://127.0.0.1:4173",        # same machine via IP
     "http://127.0.0.1:8000",        # local API origin (if frontend uses this)
-    # "http://localhost:3000",        # in case frontend runs on 3000
+   
 ],
     allow_credentials=True,
     allow_methods=["*"],
