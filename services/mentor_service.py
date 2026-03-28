@@ -820,7 +820,7 @@ class MentorService:
         ]
 
         # 3. Generate and persist the initial analysis
-        analysis = await self._generate_response(messages, max_tokens=400)
+        analysis = await self._generate_response(messages, max_tokens=1500)
         if not DEV_MODE:
             self.db.mentor.add_message(
                 conversation_id = conversation_id,
@@ -909,7 +909,7 @@ class MentorService:
             messages = self._build_messages(history, message, backtest_context)
 
             logger.info(f"Generating response for conversation {conversation_id}")
-            response = await self._generate_response(messages, max_tokens=600)
+            response = await self._generate_response(messages, max_tokens=2500)
 
             # Persist user message and assistant response (skip in dev mode)
             if not DEV_MODE:
@@ -1409,7 +1409,7 @@ Performance Metrics:
 
             logger.info(f"[stream] Streaming response for conversation {conversation_id}")
             full_response = ""
-            async for chunk in self._generate_response_stream(messages, max_tokens=600):
+            async for chunk in self._generate_response_stream(messages, max_tokens=2500):
                 full_response += chunk
                 yield chunk
 
@@ -1430,7 +1430,7 @@ Performance Metrics:
     async def _generate_response_stream(
         self,
         messages:   List[Dict],
-        max_tokens: int = 600,
+        max_tokens: int = 2500,
     ):
         """
         Call the Mistral API in streaming mode and yield text delta chunks.
