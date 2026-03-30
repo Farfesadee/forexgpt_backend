@@ -1435,7 +1435,7 @@ Performance Metrics:
         """
         Call the Mistral API in streaming mode and yield text delta chunks.
         """
-        async with self.client.chat.stream_async(
+        async with await self.client.chat.stream_async(
             model       = self.model_id,
             messages    = messages,
             max_tokens  = max_tokens,
