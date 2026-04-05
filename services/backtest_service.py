@@ -60,6 +60,10 @@ def _build_strategy(strategy: str, params: Dict[str, Any]):
     """Build a strategy function from name + params."""
     strategy = strategy.lower().replace(" ", "_")
 
+    # Accept the common shorthand used by the frontend/test prompts.
+    if strategy == "sma":
+        strategy = "moving_average_crossover"
+
     if strategy == "rsi":
         period     = params.get("period", 14)
         oversold   = params.get("oversold", 30)
@@ -140,7 +144,7 @@ def _build_strategy(strategy: str, params: Dict[str, Any]):
     else:
         raise ValueError(
             f"Unknown strategy '{strategy}'. "
-            f"Supported: rsi, moving_average_crossover, bollinger_bands, macd"
+            f"Supported: rsi, sma, moving_average_crossover, bollinger_bands, macd"
         )
 
 
@@ -184,7 +188,7 @@ class BacktestService:
             end_date:          "YYYY-MM-DD"
             timeframe:         "1d" or "1wk"
             initial_capital:   Starting capital
-            strategy_name:     rsi | moving_average_crossover | bollinger_bands | macd
+            strategy_name:     rsi | sma | moving_average_crossover | bollinger_bands | macd
             strategy_params:   Strategy-specific parameters
             cost_preset:       From CostModel presets
             position_size_pct: Fraction of capital per trade

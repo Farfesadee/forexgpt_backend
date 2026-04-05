@@ -720,6 +720,8 @@ from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 import logging
 import asyncio
+import httpx
+import httpcore
 
 from prompts.mentor_system_prompt import MENTOR_SYSTEM_PROMPT
 from models.mentor import BacktestContext
@@ -1434,15 +1436,49 @@ Performance Metrics:
     ):
         """
         Call the Mistral API in streaming mode and yield text delta chunks.
+
+        Implements retry for transient network errors and service-tier throttling.
         """
-        async with await self.client.chat.stream_async(
-            model       = self.model_id,
-            messages    = messages,
-            max_tokens  = max_tokens,
-            temperature = 0.7,
-            top_p       = 0.9,
-        ) as stream:
-            async for event in stream:
-                choices = event.data.choices
-                if choices and choices[0].delta.content:
-                    yield choices[0].delta.content
+        last_error = None
+        max_attempts = 3
+
+        for attempt in range(max_attempts):
+            try:
+                async with await self.client.chat.stream_async(
+                    model       = self.model_id,
+                    messages    = messages,
+                    max_tokens  = max_tokens,
+                    temperature = 0.7,
+                    top_p       = 0.9,
+                ) as stream:
+                    async for event in stream:
+                        choices = event.data.choices
+                        if choices and choices[0].delta.content:
+                            yield choices[0].delta.content
+                return
+
+            except Exception as e:
+                last_error = e
+
+                is_connect = isinstance(e, (httpx.ConnectError, httpcore.ConnectError))
+                status_code = getattr(e, "status_code", None)
+                is_rate_limit = status_code == 429 or "capacity exceeded" in str(e).lower()
+
+                if is_rate_limit:
+                    retry_delay = 10 + 2 ** attempt
+                elif is_connect:
+                    retry_delay = 2 ** attempt
+                else:
+                    retry_delay = 2 ** attempt
+
+                logger.warning(
+                    f"LLM stream attempt {attempt + 1}/{max_attempts} failed: {e}. "
+                    f"retry_delay={retry_delay}s",
+                )
+
+                if attempt < max_attempts - 1:
+                    await asyncio.sleep(retry_delay)
+
+        logger.error(f"All LLM stream retries failed: {last_error}", exc_info=True)
+        assert last_error is not None
+        raise last_error

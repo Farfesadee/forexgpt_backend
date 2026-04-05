@@ -17,9 +17,9 @@ Usage:
     df = fetcher.fetch("EURUSD", "2020-01-01", "2024-01-01", source="twelvedata")
 """
 
-import os
 import logging
 import pandas as pd
+from core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +160,7 @@ class DataFetcher:
         """
         import requests
 
-        api_key = os.getenv("TWELVE_DATA_KEY")
+        api_key = settings.TWELVE_DATA_KEY
         if not api_key:
             raise ValueError(
                 "TWELVE_DATA_KEY not found in .env. "
@@ -251,7 +251,7 @@ class DataFetcher:
         """
         import requests
 
-        api_key = os.getenv("ALPHA_VANTAGE_KEY")
+        api_key = settings.ALPHA_VANTAGE_KEY
         if not api_key:
             raise ValueError(
                 "ALPHA_VANTAGE_KEY not found in .env. "
@@ -376,9 +376,11 @@ class DataFetcher:
         Where to get free historical forex CSVs:
             https://www.histdata.com/download-free-forex-historical-data/
         """
-        csv_path = os.path.join("data", f"{symbol}.csv")
+        from pathlib import Path
 
-        if not os.path.exists(csv_path):
+        csv_path = Path("data") / f"{symbol}.csv"
+
+        if not csv_path.exists():
             raise FileNotFoundError(
                 f"CSV file not found at '{csv_path}'.\n"
                 f"Download from histdata.com and name it data/{symbol}.csv"
