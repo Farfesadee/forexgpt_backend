@@ -35,7 +35,7 @@ COPY models/       ./models/
 COPY prompts/      ./prompts/
 COPY routes/       ./routes/
 COPY services/     ./services/
-COPY supabase/     ./supabase/
+COPY supabase_project/     ./supabase_project/
 COPY main.py       .
 
 # ── Create non-root user for security ────────────────────────

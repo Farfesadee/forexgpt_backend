@@ -42,6 +42,32 @@ app.include_router(backtest.router)
 app.include_router(news.router)
 
 
+@app.on_event("startup")
+async def warmup_models():
+    """
+    Ping HuggingFace endpoints on startup to prevent cold start
+    delays for first users.
+    """
+    import httpx
+    import os
+    
+    hf_token = os.getenv("HUGGING_FACE_TOKEN")
+    model_id  = os.getenv("SIGNAL_MODEL_ID", "mistral-small-latest")
+    
+    try:
+        logger.info("Warming up HuggingFace endpoints...")
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                f"https://api-inference.huggingface.co/models/{model_id}",
+                headers={"Authorization": f"Bearer {hf_token}"},
+                json={"inputs": "warmup"},
+                timeout=30.0
+            )
+        logger.info("HuggingFace warmup complete")
+    except Exception as e:
+        logger.warning(f"Warmup failed (non-critical): {e}")
+
+
 @app.get("/health", tags=["Health"])
 def health_check(_: JWTPayload = Depends(get_current_user)):
     logger.info("Health check called.")

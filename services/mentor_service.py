@@ -25,6 +25,8 @@ from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 import logging
 import asyncio
+import httpx
+import httpcore
 
 from prompts.mentor_system_prompt import MENTOR_SYSTEM_PROMPT
 from models.mentor import BacktestContext

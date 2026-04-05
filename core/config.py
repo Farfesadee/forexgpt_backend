@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     )
     
     SITE_URL: str = "http://localhost:5173"
+
+    # Backtesting market data providers
+    ALPHA_VANTAGE_KEY: Optional[str] = None
+    TWELVE_DATA_KEY: Optional[str] = None
+
     # Model IDs
     MISTRAL_MODEL_ID: str = "mistral-small-latest"
     SIGNAL_MODEL_ID: str = "forexgpt/forexgpt-mistral-7b-forex-signals-v1.0"
