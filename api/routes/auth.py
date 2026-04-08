@@ -249,11 +249,20 @@ async def confirm_email(body: "EmailConfirmRequest"):
                 import asyncio
                 await asyncio.sleep(0.5)  # give the trigger a moment
             else:
-                logger.error(f"Profile missing after email confirmation for {res.user.id}")
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Account confirmed but profile could not be loaded. Please contact support.",
-                )
+                logger.warning(f"Profile missing after email confirmation for {res.user.id}, attempting fallback creation.")
+                try:
+                    raw_profile = db.profiles.create({
+                        "id": res.user.id,
+                        "email": res.user.email,
+                        "display_name": res.user.email.split("@")[0]
+                    })
+                    logger.info(f"Fallback profile created successfully for {res.user.id}")
+                except Exception as e2:
+                    logger.error(f"Fallback profile creation failed after confirmation for {res.user.id}: {e2}")
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Account confirmed but profile could not be loaded or created.",
+                    )
 
     profile = _build_user_profile(raw_profile)
 
@@ -369,11 +378,22 @@ async def login(body: LoginRequest):
         raw_profile = db.profiles.get(res.user.id)
         profile = _build_user_profile(raw_profile)
     except Exception as e:
-        logger.error(f"Profile fetch failed after login for {res.user.id}: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Login succeeded but profile could not be loaded.",
-        )
+        logger.warning(f"Profile fetch failed after login for {res.user.id}: {e}")
+        # Fallback: force create the profile if the database trigger fired late or is missing
+        try:
+            raw_profile = db.profiles.create({
+                "id": res.user.id,
+                "email": body.email,
+                "display_name": body.email.split("@")[0]
+            })
+            profile = _build_user_profile(raw_profile)
+            logger.info(f"Fallback profile created successfully for {res.user.id}")
+        except Exception as e2:
+            logger.error(f"Fallback profile creation also failed for {res.user.id}: {e2}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Login succeeded but profile could not be loaded or created.",
+            )
 
     db.activity.log(
         user_id=res.user.id,
@@ -614,11 +634,22 @@ async def oauth_callback(provider: str, body: OAuthCallbackRequest):
     try:
         raw_profile = db.profiles.get(res.user.id)
         profile = _build_user_profile(raw_profile)
-    except Exception:
-        raise HTTPException(
-            status_code=500,
-            detail="OAuth succeeded but profile could not be loaded.",
-        )
+    except Exception as e:
+        logger.warning(f"Profile fetch failed after OAuth login for {res.user.id}: {e}")
+        try:
+            raw_profile = db.profiles.create({
+                "id": res.user.id,
+                "email": res.user.email,
+                "display_name": res.user.user_metadata.get("full_name") if res.user.user_metadata else res.user.email.split("@")[0]
+            })
+            profile = _build_user_profile(raw_profile)
+            logger.info(f"Fallback profile created successfully for {res.user.id}")
+        except Exception as e2:
+            logger.error(f"Fallback profile creation also failed for {res.user.id}: {e2}")
+            raise HTTPException(
+                status_code=500,
+                detail="OAuth succeeded but profile could not be loaded or created.",
+            )
 
     db.activity.log(
         user_id=res.user.id,
