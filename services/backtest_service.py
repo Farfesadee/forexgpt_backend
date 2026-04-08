@@ -63,6 +63,8 @@ def _build_strategy(strategy: str, params: Dict[str, Any]):
     # Accept the common shorthand used by the frontend/test prompts.
     if strategy == "sma":
         strategy = "moving_average_crossover"
+    if strategy == "bollinger":
+        strategy = "bollinger_bands"
 
     if strategy == "rsi":
         period     = params.get("period", 14)
@@ -144,7 +146,7 @@ def _build_strategy(strategy: str, params: Dict[str, Any]):
     else:
         raise ValueError(
             f"Unknown strategy '{strategy}'. "
-            f"Supported: rsi, sma, moving_average_crossover, bollinger_bands, macd"
+            f"Supported: rsi, sma, moving_average_crossover, bollinger, bollinger_bands, macd"
         )
 
 
@@ -188,7 +190,7 @@ class BacktestService:
             end_date:          "YYYY-MM-DD"
             timeframe:         "1d" or "1wk"
             initial_capital:   Starting capital
-            strategy_name:     rsi | sma | moving_average_crossover | bollinger_bands | macd
+            strategy_name:     rsi | sma | moving_average_crossover | bollinger | bollinger_bands | macd
             strategy_params:   Strategy-specific parameters
             cost_preset:       From CostModel presets
             position_size_pct: Fraction of capital per trade
