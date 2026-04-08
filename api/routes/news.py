@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/news", tags=["News"])
 
-@router.get("/")
+@router.get("")
 def get_news():
     """
     Fetches real-time Forex news from DailyFX RSS and mixes in 
