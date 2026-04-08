@@ -573,6 +573,7 @@ DB calls use db.signals repo from core.database.
 
 import json
 import asyncio
+import re
 from typing import Dict, List, Optional
 import logging
 
@@ -647,7 +648,18 @@ class SignalService:
             signal_data["raw_response"] = raw_response
             signal_data["company_name"] = company_name
 
-            if save_to_db and signal_data["signal"]:
+            signal_data["currency_pair"] = self._normalize_currency_pair(
+                signal_data.get("currency_pair")
+            )
+
+            if not signal_data["signal"]:
+                signal_data["currency_pair"] = None
+                signal_data["direction"] = None
+                signal_data["confidence"] = None
+                signal_data["magnitude"] = None
+                signal_data["time_horizon"] = None
+
+            if save_to_db and signal_data["signal"] and signal_data.get("currency_pair"):
                 excerpt = transcript[:500] + "..." if len(transcript) > 500 else transcript
                 saved = db.signals.create(user_id, {
                     "currency_pair":      [signal_data.get("currency_pair")] if signal_data.get("currency_pair") else None, # signal_data.get("currency_pair"),
@@ -737,6 +749,8 @@ class SignalService:
         """Return saved signals for a user with optional pair/direction filters."""
         try:
             rows = db.signals.list(user_id=user_id, pair=currency_pair, direction=direction, limit=limit)
+            for row in rows:
+                row["currency_pair"] = self._normalize_currency_pair(row.get("currency_pair"))
             return rows
         except Exception as e:
             logger.error(f"Error retrieving signals: {e}", exc_info=True)
@@ -760,9 +774,7 @@ class SignalService:
             if not row or row.get("user_id") != user_id:
                 return None
             
-            # Normalize currency_pair from array to string
-            cp = row.get("currency_pair")
-            row["currency_pair"] = cp[0] if isinstance(cp, list) else cp
+            row["currency_pair"] = self._normalize_currency_pair(row.get("currency_pair"))
             
             # Add signal_id field for Pydantic model
             row["signal_id"] = str(row["id"])
@@ -846,7 +858,7 @@ class SignalService:
             # return stats
 
             for s in signals:
-                pair = s.get("currency_pair") or "UNKNOWN"
+                pair = self._normalize_currency_pair(s.get("currency_pair")) or "UNKNOWN"
                 stats["by_currency_pair"][pair] = stats["by_currency_pair"].get(pair, 0) + 1
 
                 direction = (s.get("direction") or "UNKNOWN").upper()
@@ -877,6 +889,40 @@ class SignalService:
                  "Extract forex trading signals from this earnings call transcript."
         return f"{prefix} Return a structured JSON response.\n\nTranscript:\n{transcript}"
 
+    def _normalize_currency_pair(self, value: object) -> Optional[str]:
+        """
+        Normalize model or DB currency pair values into a consistent XXX/YYY format.
+        Returns None for malformed values so they do not pollute saved history.
+        """
+        if isinstance(value, list):
+            value = value[0] if value else None
+
+        if value is None:
+            return None
+
+        text = str(value).strip().upper()
+        if not text:
+            return None
+
+        # Drop common placeholders and labels produced by model formatting.
+        text = re.sub(r"^\s*(CURRENCY_?PAIR|PAIR)\s*[:=\-]*\s*", "", text)
+        if text in {"N/A", "NA", "NONE", "NULL", "UNKNOWN"}:
+            return None
+
+        for slash in ("\\", "-", "–", "—", "／", "|"):
+            text = text.replace(slash, "/")
+        text = re.sub(r"\s+", "", text)
+
+        matched_pair = re.search(r"\b([A-Z]{3})/([A-Z]{3})\b", text)
+        if matched_pair:
+            return f"{matched_pair.group(1)}/{matched_pair.group(2)}"
+
+        collapsed = re.sub(r"[^A-Z]", "", text)
+        if len(collapsed) == 6:
+            return f"{collapsed[:3]}/{collapsed[3:]}"
+
+        return None
+
     def _parse_signal_response(self, response: str) -> Dict:
         """
         Parse and validate the JSON output from the model.
@@ -904,6 +950,8 @@ class SignalService:
             for field in ("currency_pair", "direction", "confidence", "magnitude", "time_horizon"):
                 data.setdefault(field, None)
 
+            data["currency_pair"] = self._normalize_currency_pair(data["currency_pair"])
+
             # Validate confidence
             if data["confidence"] is not None:
                 if not isinstance(data["confidence"], (int, float)):
@@ -926,7 +974,14 @@ class SignalService:
                 data["magnitude"] = None
 
             # Validate time_horizon
-            valid_horizons = ("current_quarter", "long_term", "next_quarter")
+            valid_horizons = (
+                "current_quarter",
+                "long_term",
+                "next_quarter",
+                "full_term",
+                "short_term",
+                "full_year",
+            )
             if data["time_horizon"] is not None and data["time_horizon"] not in valid_horizons:
                 logger.warning(f"Invalid time_horizon: {data['time_horizon']}")
                 data["time_horizon"] = None
