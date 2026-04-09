@@ -95,7 +95,7 @@ class MentorService:
             {"role": "user",   "content": self._build_initial_analysis_prompt(backtest_context)},
         ]
 
-        analysis = await self._generate_response(messages, max_tokens=400)
+        analysis = await self._generate_response(messages, max_tokens=1000)
 
         # 4. Save the initial analysis so it's part of the conversation history
         self.db.mentor.add_message(
@@ -400,27 +400,62 @@ class MentorService:
             fmt("cagr_pct",             "CAGR",               "%"),
             fmt("calmar_ratio",         "Calmar Ratio"),
             fmt("expectancy",           "Expectancy"),
+            fmt("net_profit_usd",   "Net Profit",          " USD"),
         ]
         metrics_str = "\n".join(line for line in metric_lines if line)
 
         params_section = ""
         if ctx.parameters:
             params_str = "\n".join(f"  - {k}: {v}" for k, v in ctx.parameters.items())
-            params_section = f"\nSTRATEGY PARAMETERS:\n{params_str}\n"
+            params_section = f"""
+STRATEGY PARAMETERS:
+{params_str}
+"""
+        # Include strategy logic if provided
+        logic_section = ""
+        if ctx.metrics.get("strategy_logic"):
+            logic = ctx.metrics["strategy_logic"]
+            if logic.get("rules"):
+                rules_str = "\n".join(
+                    f"  - {r.get('signal', '')}: {r.get('condition', '')} ({r.get('explanation', '')})"
+                    for r in logic.get("rules", [])
+                )
+                logic_section = f"""
+STRATEGY RULES USED:
+{rules_str}
+"""
+        # Include sample signals if provided
+        signals_section = ""
+        sample_signals = ctx.metrics.get("sample_signals", [])
+        if sample_signals:
+            signals_str = "\n".join(
+                f"  - {s.get('date', '')}: {s.get('signal', '').upper()} — "
+                f"{s.get('signal_reason') or 'signal fired'} → "
+                f"{'WIN' if s.get('pnl', 0) > 0 else 'LOSS'} (PnL: {s.get('pnl', 0)})"
+                for s in sample_signals
+            )
+            signals_section = f"""
+EXAMPLE SIGNALS THAT FIRED:
+{signals_str}
+"""
+            
 
         return f"""I just ran a backtest for my {ctx.strategy_type} strategy.
-{params_section}
+{params_section}{logic_section}{signals_section}
 PERFORMANCE RESULTS:
 {metrics_str}
 
-Give me a concise analysis — under 150 words.
-Structure:
-- VERDICT (1 sentence: PASS or FAIL + main reason)
-- WHY (2-3 bullets: key reasons only)
-- NEXT STEPS (2 bullets: most impactful improvements)
+Please give me a concise educational analysis of this run.
+Keep your entire response under 150 words.
+Use this exact structure:
+- VERDICT (1 sentence — PASS or FAIL and the single most important reason)
+- WHY (2-3 bullet points — most important reasons only)
+- NEXT STEPS (2 bullet points — most impactful improvements)
 
-After this initial analysis, answer all my follow-up questions with full
-educational depth — explain metrics, concepts, and theory thoroughly."""
+No lengthy explanations. If I want more detail I will ask.
+After the initial verdict, answer all follow-up questions with full 
+educational depth — explain metrics, concepts, and theory thoroughly 
+when the user asks for more detail."""
 
     @staticmethod
     def _format_context_for_llm(ctx: BacktestContext) -> str:
