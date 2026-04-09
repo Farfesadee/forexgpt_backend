@@ -21,6 +21,7 @@ DB tables used:
 
 import uuid
 import json
+import re
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 import logging
@@ -588,15 +589,76 @@ Metrics:
         messages:   List[Dict],
         max_tokens: int = 600,
     ):
-        """Call Mistral in streaming mode and yield text delta chunks."""
-        async with await self.client.chat.stream_async(
-            model       = self.model_id,
-            messages    = messages,
-            max_tokens  = max_tokens,
-            temperature = 0.7,
-            top_p       = 0.9,
-        ) as stream:
-            async for event in stream:
-                choices = event.data.choices
-                if choices and choices[0].delta.content:
-                    yield choices[0].delta.content
+        """
+        Call Mistral in streaming mode and yield text delta chunks.
+
+        Retries stream setup failures before falling back to a regular completion
+        split into small chunks so the UI can still render progressively.
+        """
+        last_error = None
+
+        for attempt in range(3):
+            emitted_any = False
+            try:
+                async with await self.client.chat.stream_async(
+                    model       = self.model_id,
+                    messages    = messages,
+                    max_tokens  = max_tokens,
+                    temperature = 0.7,
+                    top_p       = 0.9,
+                ) as stream:
+                    async for event in stream:
+                        choices = event.data.choices
+                        if choices and choices[0].delta.content:
+                            emitted_any = True
+                            yield choices[0].delta.content
+                return
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Streaming attempt {attempt + 1}/3 failed: {e}")
+                if emitted_any:
+                    logger.error("Streaming failed after partial output; not retrying to avoid duplicated text.")
+                    raise
+                if attempt < 2:
+                    await asyncio.sleep(2 ** attempt)
+
+        logger.warning(
+            "Streaming provider remained unavailable; falling back to chunked non-stream response. "
+            f"Last error: {last_error}"
+        )
+        fallback_text = await self._generate_response(messages, max_tokens=max_tokens)
+        async for chunk in self._yield_fallback_chunks(fallback_text):
+            yield chunk
+
+    async def _yield_fallback_chunks(
+        self,
+        text: str,
+        chunk_size: int = 32,
+        delay_seconds: float = 0.03,
+    ):
+        """Yield a regular completion in small chunks when true streaming is unavailable."""
+        if not text:
+            return
+
+        tokens = re.findall(r"\S+\s*|\n", text)
+        buffer = ""
+
+        for token in tokens:
+            if token == "\n":
+                if buffer:
+                    yield buffer
+                    buffer = ""
+                    await asyncio.sleep(delay_seconds)
+                yield "\n"
+                await asyncio.sleep(delay_seconds)
+                continue
+
+            if buffer and len(buffer) + len(token) > chunk_size:
+                yield buffer
+                buffer = token
+                await asyncio.sleep(delay_seconds)
+            else:
+                buffer += token
+
+        if buffer:
+            yield buffer
