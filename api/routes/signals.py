@@ -37,6 +37,7 @@ from core.dependencies import get_signal_service
 from api.middleware.auth_middleware import get_current_user
 from models.user import JWTPayload
 from typing import Optional
+from services.ai_errors import AIServiceUnavailableError
 
 router = APIRouter(prefix="/signals", tags=["signals"])
 
@@ -67,6 +68,8 @@ async def extract_signal(
             save_to_db=request.save_to_db
         )
         return result
+    except AIServiceUnavailableError:
+        raise
     except HTTPException:
         raise
     except Exception as e:
@@ -99,6 +102,8 @@ async def batch_extract(
             "total": len(signals),
             "signals_found": sum(1 for s in signals if s.get("signal"))
         }
+    except AIServiceUnavailableError:
+        raise
     except HTTPException:
         raise
     except Exception as e:

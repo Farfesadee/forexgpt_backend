@@ -494,6 +494,11 @@ from prompts.codegen_prompt import CODEGEN_SYSTEM_PROMPT
 import logging
 
 from core.database import get_db
+from services.ai_errors import (
+    AIServiceUnavailableError,
+    is_capacity_exceeded_error,
+    is_temporary_ai_unavailable_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -531,9 +536,19 @@ class CodeGenService:
         3. Modification        -- previous_code, no error_message
     """
 
-    def __init__(self, mistral_client, model_id: str = "mistral-small-latest"):
+    def __init__(
+        self,
+        mistral_client,
+        model_id: str = "mistral-small-latest",
+        fallback_model_ids: Optional[List[str]] = None,
+    ):
         self.client        = mistral_client
         self.model_id      = model_id
+        self.fallback_model_ids = [
+            fallback_model_id.strip()
+            for fallback_model_id in (fallback_model_ids or [])
+            if fallback_model_id and fallback_model_id.strip() and fallback_model_id.strip() != model_id
+        ]
         self.system_prompt = CODEGEN_SYSTEM_PROMPT
 
     # =========================================================================
@@ -905,25 +920,49 @@ class CodeGenService:
         return code, explanation
 
     async def _generate_response(self, messages: List[Dict]) -> str:
-        """Call Mistral with up to 2 retries. temperature=0.3 for deterministic code."""
+        """Call Mistral with retries and optional model fallback."""
         last_error = None
-        for attempt in range(2):
-            try:
-                response = await self.client.chat.complete_async(
-                    model=self.model_id,
-                    messages=messages,
-                    max_tokens=2500,
-                    temperature=0.3,
-                    top_p=0.9,
-                )
-                return response.choices[0].message.content
-            except Exception as e:
-                last_error = e
-                logger.warning(f"_generate_response attempt {attempt + 1} failed: {e}")
-                if attempt < 1:
-                    await asyncio.sleep(1)
+        model_ids = [self.model_id, *self.fallback_model_ids]
+
+        for model_index, model_id in enumerate(model_ids):
+            for attempt in range(2):
+                try:
+                    response = await self.client.chat.complete_async(
+                        model=model_id,
+                        messages=messages,
+                        max_tokens=2500,
+                        temperature=0.3,
+                        top_p=0.9,
+                    )
+                    if model_id != self.model_id:
+                        logger.info("Codegen request succeeded with fallback model %s", model_id)
+                    return response.choices[0].message.content
+                except Exception as e:
+                    last_error = e
+                    is_capacity_error = is_capacity_exceeded_error(e)
+                    logger.warning(
+                        "_generate_response attempt %s failed for model %s: %s",
+                        attempt + 1,
+                        model_id,
+                        e,
+                    )
+
+                    if is_capacity_error and model_index < len(model_ids) - 1:
+                        logger.info(
+                            "Primary codegen model %s is at capacity; trying fallback model %s",
+                            model_id,
+                            model_ids[model_index + 1],
+                        )
+                        break
+
+                    if attempt < 1:
+                        await asyncio.sleep(1 + attempt)
 
         logger.error(f"All retries exhausted: {last_error}", exc_info=True)
+        if last_error and is_temporary_ai_unavailable_error(last_error):
+            raise AIServiceUnavailableError(
+                "The code generation model is temporarily at capacity. Please try again in a moment."
+            )
         raise last_error
     
     def _build_improvement_message(

@@ -34,6 +34,7 @@ from models.codegen import (
 from core.dependencies import get_codegen_service
 from api.middleware.auth_middleware import get_current_user
 from models.user import JWTPayload
+from services.ai_errors import AIServiceUnavailableError
 
 router = APIRouter(prefix="/codegen", tags=["codegen"])
 
@@ -65,6 +66,8 @@ async def generate_code(
             error_message=request.error_message
         )
         return result
+    except AIServiceUnavailableError:
+        raise
     except HTTPException:
         raise
     except Exception as e:

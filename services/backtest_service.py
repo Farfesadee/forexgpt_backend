@@ -35,6 +35,10 @@ from backtesting.metrics.performance_metrics import PerformanceMetrics
 logger = logging.getLogger(__name__)
 
 
+class BacktestExecutionTimeoutError(RuntimeError):
+    """Raised when sandboxed custom strategy execution exceeds the time limit."""
+
+
 # ============================================================================
 # STRATEGY BUILDER
 # Returns a callable compatible with BacktestEngine.run_backtest()
@@ -511,7 +515,7 @@ except Exception as e:
             return signals_series
 
         except subprocess.TimeoutExpired:
-            raise Exception(
+            raise BacktestExecutionTimeoutError(
                 "Strategy execution timed out (30 s limit). "
                 "Simplify your logic or reduce the date range."
             )

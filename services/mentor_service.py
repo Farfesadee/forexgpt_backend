@@ -30,6 +30,7 @@ import httpcore
 
 from prompts.mentor_system_prompt import MENTOR_SYSTEM_PROMPT
 from models.mentor import BacktestContext
+from services.ai_errors import AIServiceUnavailableError, is_temporary_ai_unavailable_error
 
 logger = logging.getLogger(__name__)
 
@@ -521,6 +522,10 @@ Metrics:
                     await asyncio.sleep(2 ** attempt)
 
         logger.error(f"All LLM retries failed: {last_error}", exc_info=True)
+        if last_error and is_temporary_ai_unavailable_error(last_error):
+            raise AIServiceUnavailableError(
+                "The mentor model is temporarily at capacity. Please try again in a moment."
+            )
         raise last_error
 
     # =========================================================================

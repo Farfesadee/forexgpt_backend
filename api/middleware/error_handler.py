@@ -11,12 +11,27 @@ from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from httpx import HTTPStatusError
+from services.ai_errors import AIServiceUnavailableError
 
 logger = logging.getLogger(__name__)
 
 
 def register_error_handlers(app: FastAPI) -> None:
     """Register all global error handlers on the FastAPI app instance."""
+
+    @app.exception_handler(AIServiceUnavailableError)
+    async def ai_service_unavailable_handler(request: Request, exc: AIServiceUnavailableError):
+        """Return a consistent 503 response for temporary upstream AI outages."""
+        logger.warning(f"AI service unavailable on {request.url}: {exc}")
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "detail": str(exc),
+                "error_type": "ai_service_unavailable",
+                "retry_after": exc.retry_after_seconds,
+            },
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        )
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(request: Request, exc: RequestValidationError):

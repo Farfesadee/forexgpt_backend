@@ -40,6 +40,7 @@ from models.mentor import (
 )
 from models.user import JWTPayload
 from services.mentor_service import MentorService
+from services.ai_errors import AIServiceUnavailableError
 from core.dependencies import get_mentor_service
 from api.middleware.auth_middleware import get_current_user
 
@@ -76,6 +77,8 @@ async def start_conversation(
             conversation_id = None,
         )
         return AskQuestionResponse(**result)
+    except AIServiceUnavailableError:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -99,6 +102,8 @@ async def ask_question(
             conversation_id = conversation_id,
         )
         return AskQuestionResponse(**result)
+    except AIServiceUnavailableError:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -120,6 +125,8 @@ async def ask_question_simple(
             conversation_id = request.conversation_id,
         )
         return AskQuestionResponse(**result)
+    except AIServiceUnavailableError:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -169,6 +176,8 @@ async def get_conversation_history_legacy(
             history         = [ConversationMessageResponse(**m) for m in history],
             message_count   = len(history),
         )
+    except AIServiceUnavailableError:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -211,6 +220,8 @@ async def list_conversations(
     try:
         conversations = service.list_user_conversations(user.user_id, limit)
         return [ConversationSummaryResponse(**c) for c in conversations]
+    except AIServiceUnavailableError:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -284,6 +295,8 @@ async def start_backtest_conversation(
             backtest_context = request.backtest_context,
         )
         return StartBacktestConversationResponse(**result)
+    except AIServiceUnavailableError:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -325,6 +338,9 @@ async def ask_stream(
                 conversation_id = conversation_id,
             ):
                 yield f"data: {json.dumps(chunk)}\n\n"
+            yield "data: [DONE]\n\n"
+        except AIServiceUnavailableError as e:
+            yield f"data: {json.dumps({'error': str(e), 'error_type': 'ai_service_unavailable', 'retry_after': e.retry_after_seconds})}\n\n"
             yield "data: [DONE]\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"

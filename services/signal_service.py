@@ -578,6 +578,7 @@ from typing import Dict, List, Optional
 import logging
 
 from core.database import db
+from services.ai_errors import AIServiceUnavailableError, is_temporary_ai_unavailable_error
 
 logger = logging.getLogger(__name__)
 
@@ -1069,4 +1070,8 @@ class SignalService:
                     await asyncio.sleep(2)
 
         logger.error(f"All retries exhausted: {last_error}", exc_info=True)
+        if last_error and is_temporary_ai_unavailable_error(last_error):
+            raise AIServiceUnavailableError(
+                "The signal extraction model is temporarily at capacity. Please try again in a moment."
+            )
         raise last_error
