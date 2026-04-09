@@ -8,6 +8,7 @@ from routes.mentor_routes import router as mentor_router   # ← new mentor rout
 from api.routes import auth, signals, codegen, backtest, news
 from api.middleware.auth_middleware import get_current_user
 from models.user import JWTPayload
+from core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -17,16 +18,23 @@ app = FastAPI(
     redirect_slashes=False
 )
 
+
+def _build_allowed_origins() -> list[str]:
+    origins = {
+        settings.SITE_URL.rstrip("/"),
+        "https://www.forexgpt.com.ng",
+        "https://forexgpt.com.ng",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:4173",
+        "http://127.0.0.1:4173",
+        "http://127.0.0.1:8000",
+    }
+    return sorted(origin for origin in origins if origin)
+
 app.add_middleware(
     CORSMiddleware,
-   allow_origins=[
-    "https://www.forexgpt.com.ng",
-    "http://localhost:5173",        # keep this for local development
-    "http://localhost:4173",        # vite preview default
-    "http://127.0.0.1:4173",        # same machine via IP
-    "http://127.0.0.1:8000",        # local API origin (if frontend uses this)
-   
-],
+    allow_origins=_build_allowed_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -318,6 +318,8 @@ async def ask_stream(
     conversation_id = request.conversation_id or str(uuid.uuid4())
 
     async def event_generator():
+        # Flush an initial SSE frame so clients/proxies open the stream promptly.
+        yield ": connected\n\n"
         try:
             async for chunk in service.ask_question_stream(
                 user_id         = user.user_id,
@@ -335,6 +337,7 @@ async def ask_stream(
         media_type="text/event-stream",
         headers={
             "Cache-Control":                 "no-cache",
+            "Connection":                    "keep-alive",
             "X-Accel-Buffering":             "no",
             "Access-Control-Allow-Origin":   "*",
             "Access-Control-Expose-Headers": "X-Conversation-Id",
