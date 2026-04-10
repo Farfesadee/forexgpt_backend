@@ -486,6 +486,7 @@ class BacktestService:
 import pandas as pd
 import numpy as np
 import json, sys
+from typing import *
 
 # Load price data
 with open('{data_file_path}', 'r') as f:

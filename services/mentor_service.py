@@ -284,19 +284,19 @@ class MentorService:
         if conversation_id in self._deleted_conversations:
             return [], None
 
+        # Verify ownership at the conversation level, not just via messages.
+        conv_rows = self.db.mentor._conv \
+            .select("user_id") \
+            .eq("id", conversation_id) \
+            .limit(1).execute().data
+
+        if conv_rows and conv_rows[0].get("user_id") != user_id:
+            return None, None
+
         rows = self.db.mentor.get_history(conversation_id)
 
         if not rows:
             return [], None
-
-        # Verify ownership
-        ownership = self.db.mentor._msg \
-            .select("user_id") \
-            .eq("conversation_id", conversation_id) \
-            .limit(1).execute().data
-
-        if ownership and ownership[0].get("user_id") != user_id:
-            return None, None
 
         history: List[Dict] = []
         backtest_context: Optional[BacktestContext] = None
@@ -316,6 +316,10 @@ class MentorService:
                 })
 
         return history, backtest_context
+
+    def _conversation_exists(self, conversation_id: str) -> bool:
+        rows = self.db.mentor._conv.select("id").eq("id", conversation_id).limit(1).execute().data
+        return bool(rows)
 
     def _save_message(
         self,
@@ -560,6 +564,14 @@ Metrics:
                 )
                 history          = []
                 backtest_context = None
+
+            # Ensure a conversation record exists for streamed messages.
+            if conversation_id and not self._conversation_exists(conversation_id):
+                self.db.mentor.create_conversation(
+                    id      = conversation_id,
+                    user_id = user_id,
+                    title   = None,
+                )
 
             # Save user message before streaming starts
             self._save_message(conversation_id, user_id, role="user", content=message)
