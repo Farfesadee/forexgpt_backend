@@ -377,6 +377,7 @@ from models.mentor import (
 from models.user import JWTPayload
 from api.middleware.auth_middleware import get_current_user
 from core.dependencies import get_mentor_service
+from services.ai_errors import AIServiceUnavailableError
 
 router = APIRouter(prefix="/mentor", tags=["mentor"])
 service = get_mentor_service()
@@ -406,6 +407,8 @@ async def ask_question(
             conversation_id=request.conversation_id
         )
         return result
+    except AIServiceUnavailableError:
+        raise
     except HTTPException:
         raise
     except Exception as e:

@@ -3,7 +3,7 @@ Backtesting Engine
 Core engine for strategy backtesting with realistic cost modeling.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Callable, Any
 from datetime import datetime, timedelta
 import pandas as pd
@@ -46,19 +46,25 @@ class Trade:
     holding_days: int
     return_pct: float
     
+    # ── NEW: why the entry signal fired (parameterised strategies only) ──
+    # e.g. "RSI = 28.4 < 30 (oversold)" or "MA50 crossed above MA200"
+    # None for custom code strategies — user knows their own logic
+    signal_reason: Optional[str] = None
+    
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return {
-            "entry_date": self.entry_date,
-            "entry_price": self.entry_price,
-            "exit_date": self.exit_date,
-            "exit_price": self.exit_price,
-            "quantity": self.quantity,
-            "side": self.side,
-            "holding_days": self.holding_days,
-            "gross_pnl": self.gross_pnl,
-            "net_pnl": self.net_pnl,
-            "return_pct": self.return_pct,
+            "entry_date":    self.entry_date,
+            "entry_price":   self.entry_price,
+            "exit_date":     self.exit_date,
+            "exit_price":    self.exit_price,
+            "quantity":      self.quantity,
+            "side":          self.side,
+            "holding_days":  self.holding_days,
+            "gross_pnl":     self.gross_pnl,
+            "net_pnl":       self.net_pnl,
+            "return_pct":    self.return_pct,
+            "signal_reason": self.signal_reason,
             **self.costs.to_dict()
         }
 
@@ -70,6 +76,9 @@ class Position:
     entry_price: float
     quantity: float
     side: str
+    
+    # ── NEW: reason the entry signal fired, carried through to Trade ────
+    signal_reason: Optional[str] = None
     
     def mark_to_market(self, current_price: float) -> float:
         """Calculate unrealized P&L."""
@@ -88,6 +97,7 @@ class BacktestEngine:
     - Position tracking
     - Trade logging
     - Performance metrics
+    - Signal reason tracking
     """
     
     def __init__(
@@ -102,26 +112,26 @@ class BacktestEngine:
         Initialize backtest engine.
         
         Args:
-            initial_capital: Starting capital
-            cost_model: Cost model to use
+            initial_capital:   Starting capital
+            cost_model: Cost   model to use
             position_size_pct: Percentage of capital to risk per trade
-            max_positions: Maximum concurrent positions
-            allow_shorting: Whether short positions are allowed
+            max_positions:     Maximum concurrent positions
+            allow_shorting:    Whether short positions are allowed
         """
-        self.initial_capital = initial_capital
-        self.capital = initial_capital
-        self.cost_model = cost_model or CostModel()
+        self.initial_capital =   initial_capital
+        self.capital =           initial_capital
+        self.cost_model =        cost_model or CostModel()
         self.position_size_pct = position_size_pct
-        self.max_positions = max_positions
-        self.allow_shorting = allow_shorting
+        self.max_positions =     max_positions
+        self.allow_shorting =    allow_shorting
         
         # State
-        self.positions: List[Position] = []
+        self.positions:     List[Position] = []
         self.closed_trades: List[Trade] = []
-        self.equity_curve: List[Dict] = []
+        self.equity_curve:  List[Dict] = []
         
         # Current state
-        self.current_date: Optional[datetime] = None
+        self.current_date:  Optional[datetime] = None
         self.current_price: float = 0.0
     
     def can_open_position(self) -> bool:
@@ -132,7 +142,7 @@ class BacktestEngine:
         """Calculate position size based on capital."""
         # Use percentage of available capital
         position_value = self.capital * self.position_size_pct
-        quantity = position_value / price
+        quantity       = position_value / price
         return quantity
     
     def open_position(
@@ -141,7 +151,8 @@ class BacktestEngine:
         price: float,
         side: str,
         quantity: Optional[float] = None,
-        market_conditions: Optional[Dict] = None
+        market_conditions: Optional[Dict] = None,
+        signal_reason: Optional[str] = None,
     ) -> bool:
         """
         Open a new position.
@@ -152,6 +163,8 @@ class BacktestEngine:
             side: "long" or "short"
             quantity: Position size (if None, auto-calculated)
             market_conditions: Market state for cost calculation
+            signal_reason:     Human-readable reason the signal fired
+                               e.g. "RSI = 28.4 < 30 (oversold)"
         
         Returns:
             True if position opened successfully
@@ -171,7 +184,8 @@ class BacktestEngine:
             entry_date=date,
             entry_price=price,
             quantity=quantity,
-            side=side
+            side=side,
+            signal_reason=signal_reason,
         )
         
         self.positions.append(position)
@@ -191,9 +205,9 @@ class BacktestEngine:
         Close an existing position.
         
         Args:
-            position: Position to close
-            date: Exit date
-            price: Exit price
+            position:          Position to close
+            date:              Exit date
+            price:             Exit price
             market_conditions: Market state for cost calculation
         
         Returns:
@@ -238,7 +252,8 @@ class BacktestEngine:
             gross_pnl=gross_pnl,
             net_pnl=net_pnl,
             holding_days=holding_days,
-            return_pct=return_pct
+            return_pct=return_pct,
+            signal_reason=position.signal_reason,
         )
         
         # Update capital
@@ -277,12 +292,12 @@ class BacktestEngine:
         
         # Record
         record = {
-            "date": date,
-            "price": price,
-            "capital": self.capital,
+            "date":           date,
+            "price":          price,
+            "capital":        self.capital,
             "unrealized_pnl": unrealized_pnl,
-            "total_equity": total_equity,
-            "num_positions": len(self.positions)
+            "total_equity":   total_equity,
+            "num_positions":  len(self.positions)
         }
         
         if ohlc:
@@ -306,31 +321,40 @@ class BacktestEngine:
         Run backtest on historical data.
         
         Args:
-            data: DataFrame with price data
-            strategy: Strategy function that returns signals
+            data:      DataFrame with price data
+            strategy:  Strategy function — may return:
+                         - a plain string: "buy" | "sell" | "short" | "cover" | None
+                         - a tuple:        ("buy", "RSI = 28.4 < 30 (oversold)")
+                       Both forms are handled transparently.
             price_col: Column name for price
-            date_col: Column name for date
+            date_col:  Column name for date
         
         Returns:
             Backtest results dictionary
         """
         for idx, row in data.iterrows():
-            date = row[date_col]
+            date =  row[date_col]
             price = row[price_col]
             
             # Get market conditions
             market_conditions = {
-                "volatility": row.get("volatility", 1.0),
+                "volatility":   row.get("volatility", 1.0),
                 "volume_ratio": row.get("volume_ratio", 1.0),
-                "liquidity": row.get("liquidity", 1.0)
+                "liquidity":    row.get("liquidity", 1.0)
             }
             
             # Get strategy signal
-            signal = strategy(data.iloc[:idx+1])
+            raw_result = strategy(data.iloc[:idx + 1])
+            if isinstance(raw_result, tuple):
+                signal, signal_reason = raw_result
+            else:
+                signal        = raw_result
+                signal_reason = None
+            
             
             # Process signal
             if signal == "buy" and self.can_open_position():
-                self.open_position(date, price, "long", market_conditions=market_conditions)
+                self.open_position(date, price, "long", market_conditions=market_conditions, signal_reason=signal_reason,)
             
             elif signal == "sell" and len(self.positions) > 0:
                 # Close long positions
@@ -339,7 +363,7 @@ class BacktestEngine:
                         self.close_position(pos, date, price, market_conditions)
             
             elif signal == "short" and self.can_open_position() and self.allow_shorting:
-                self.open_position(date, price, "short", market_conditions=market_conditions)
+                self.open_position(date, price, "short", market_conditions=market_conditions, signal_reason=signal_reason,)
             
             elif signal == "cover" and len(self.positions) > 0:
                 # Close short positions
@@ -352,7 +376,7 @@ class BacktestEngine:
         
         # Close any remaining positions
         if len(self.positions) > 0:
-            last_date = data[date_col].iloc[-1]
+            last_date =  data[date_col].iloc[-1]
             last_price = data[price_col].iloc[-1]
             self.close_all_positions(last_date, last_price)
         
@@ -362,18 +386,18 @@ class BacktestEngine:
         """Get backtest results."""
         return {
             "initial_capital": self.initial_capital,
-            "final_capital": self.capital,
-            "total_return": ((self.capital - self.initial_capital) / self.initial_capital) * 100,
-            "num_trades": len(self.closed_trades),
-            "trades": [t.to_dict() for t in self.closed_trades],
-            "equity_curve": self.equity_curve
+            "final_capital":   self.capital,
+            "total_return":    ((self.capital - self.initial_capital) / self.initial_capital) * 100,
+            "num_trades":      len(self.closed_trades),
+            "trades":          [t.to_dict() for t in self.closed_trades],
+            "equity_curve":    self.equity_curve
         }
     
     def reset(self):
         """Reset engine to initial state."""
-        self.capital = self.initial_capital
-        self.positions = []
+        self.capital       = self.initial_capital
+        self.positions     = []
         self.closed_trades = []
-        self.equity_curve = []
-        self.current_date = None
+        self.equity_curve  = []
+        self.current_date  = None
         self.current_price = 0.0

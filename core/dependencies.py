@@ -570,6 +570,10 @@ def _require_mistral_client():
         ) from exc
 
 
+def _parse_model_ids(raw_value: str) -> list[str]:
+    return [model_id.strip() for model_id in raw_value.split(",") if model_id.strip()]
+
+
 def get_mentor_service() -> MentorService:
     return MentorService(
         mistral_client = _require_mistral_client(),
@@ -582,6 +586,7 @@ def get_codegen_service() -> CodeGenService:
     return CodeGenService(
         mistral_client=_require_mistral_client(),
         model_id=settings.MISTRAL_MODEL_ID,
+        fallback_model_ids=_parse_model_ids(settings.MISTRAL_FALLBACK_MODEL_IDS),
     )
 
 

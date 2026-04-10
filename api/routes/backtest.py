@@ -18,6 +18,7 @@ from models.backtest import (
 from core.dependencies import get_backtest_service
 from api.middleware.auth_middleware import get_current_user
 from models.user import JWTPayload
+from services.backtest_service import BacktestExecutionTimeoutError
 
 router  = APIRouter(prefix="/backtest", tags=["backtest"])
 service = get_backtest_service()
@@ -168,6 +169,11 @@ async def run_custom_backtest(
         # Code validation errors and strategy runtime errors — user's fault
         raise HTTPException(status_code=400, detail=str(e))
 
+    except BacktestExecutionTimeoutError as e:
+        raise HTTPException(
+            status_code=status.HTTP_408_REQUEST_TIMEOUT,
+            detail=str(e),
+        ) from e
     except Exception as e:
         # Data fetch failures, timeout, unexpected errors
         raise HTTPException(status_code=500, detail=str(e))

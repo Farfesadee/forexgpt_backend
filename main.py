@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from routes.mentor_routes import router as mentor_router   # ← new mentor router
 from api.routes import auth, signals, codegen, backtest, news
 from api.middleware.auth_middleware import get_current_user
+from api.middleware.error_handler import register_error_handlers
 from models.user import JWTPayload
 from core.config import settings
 
@@ -18,6 +19,7 @@ app = FastAPI(
     redirect_slashes=False
 )
 
+register_error_handlers(app)
 
 def _build_allowed_origins() -> list[str]:
     origins = {
