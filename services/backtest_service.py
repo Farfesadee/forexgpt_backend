@@ -60,6 +60,20 @@ def _make_serializable(obj):
         return obj.tolist()
     return obj
 
+
+# ============================================================================
+# STRATEGY BUILDER
+# Returns a callable compatible with BacktestEngine.run_backtest()
+#
+# CHANGE FROM PREVIOUS VERSION:
+#   Every strategy fn() now returns a TUPLE (signal, reason) instead of a
+#   plain string. The reason is a human-readable explanation of why the
+#   signal fired — e.g. "RSI = 28.4 < 30 (oversold)".
+#   BacktestEngine.run_backtest() handles both tuple and plain-string returns
+#   transparently for backwards compatibility.
+# ============================================================================
+
+
 def _build_strategy(strategy: str, params: Dict[str, Any]):
     """Build a strategy function from name + params."""
     strategy = strategy.lower().replace(" ", "_")
@@ -70,6 +84,10 @@ def _build_strategy(strategy: str, params: Dict[str, Any]):
     if strategy == "bollinger":
         strategy = "bollinger_bands"
 
+    # -------------------------------------------------------------------------
+    # RSI — Relative Strength Index
+    # -------------------------------------------------------------------------
+
     if strategy == "rsi":
         period     = params.get("period", 14)
         oversold   = params.get("oversold", 30)
@@ -77,56 +95,80 @@ def _build_strategy(strategy: str, params: Dict[str, Any]):
 
         def fn(data):
             if len(data) < period + 1:
-                return None
+                return None, None
             close = data["close"]
             delta = close.diff()
             gain  = delta.where(delta > 0, 0.0).rolling(period).mean()
             loss  = (-delta.where(delta < 0, 0.0)).rolling(period).mean()
             rsi   = 100 - (100 / (1 + gain / loss))
+            current_rsi = round(float(rsi.iloc[-1]), 2)
+            
             if rsi.iloc[-1] < oversold  and rsi.iloc[-2] >= oversold:
-                return "buy"
+                return "buy", f"BUY - RSI = {current_rsi} dropped below {oversold} (oversold signal)"
             if rsi.iloc[-1] > overbought and rsi.iloc[-2] <= overbought:
-                return "sell"
-            return None
+                return "sell", f"SELL - RSI = {current_rsi} rose above {overbought} (overbought signal)"
+            return None, None
+        
         return fn
 
+    # -------------------------------------------------------------------------
+    # Moving Average Crossover
+    # -------------------------------------------------------------------------
+    
     elif strategy == "moving_average_crossover":
         fast = params.get("fast_period", 50)
         slow = params.get("slow_period", 200)
 
         def fn(data):
             if len(data) < slow:
-                return None
+                return None, None
             close   = data["close"]
             fast_ma = close.rolling(fast).mean()
             slow_ma = close.rolling(slow).mean()
+            current_fast = round(float(fast_ma.iloc[-1]), 5)
+            current_slow = round(float(slow_ma.iloc[-1]), 5)
+
             if fast_ma.iloc[-1] > slow_ma.iloc[-1] and fast_ma.iloc[-2] <= slow_ma.iloc[-2]:
-                return "buy"
+                return ("buy", f"BUY - MA{fast} ({current_fast}) crossed above MA{slow} ({current_slow}) - bullish crossover")
             if fast_ma.iloc[-1] < slow_ma.iloc[-1] and fast_ma.iloc[-2] >= slow_ma.iloc[-2]:
-                return "sell"
-            return None
+                return ("sell", f"SELL - MA{fast} ({current_fast}) crossed below MA{slow} ({current_slow}) - bearish crossover")
+            return None, None
+        
         return fn
 
+    # -------------------------------------------------------------------------
+    # Bollinger Bands
+    # -------------------------------------------------------------------------
+    
     elif strategy == "bollinger_bands":
         period  = params.get("period", 20)
         std_dev = params.get("std_dev", 2.0)
 
         def fn(data):
             if len(data) < period:
-                return None
+                return None, None
             close  = data["close"]
             middle = close.rolling(period).mean()
             std    = close.rolling(period).std()
             upper  = (middle + std_dev * std).iloc[-1]
             lower  = (middle - std_dev * std).iloc[-1]
             price  = close.iloc[-1]
+            current_price = round(float(price), 5)
+            current_upper = round(float(upper), 5)
+            current_lower = round(float(lower), 5)
+            
             if price <= lower:
-                return "buy"
+                return ("buy", f"BUY - Price ({current_price}) touched lower band ({current_lower}) - oversold signal")
             if price >= upper:
-                return "sell"
-            return None
+                return ("sell", f"SELL - Price ({current_price}) touched upper band ({current_upper}) - overbought signal")
+            return None, None
+        
         return fn
 
+    # -------------------------------------------------------------------------
+    # MACD — Moving Average Convergence Divergence
+    # -------------------------------------------------------------------------
+    
     elif strategy == "macd":
         fast   = params.get("fast", 12)
         slow   = params.get("slow", 26)
@@ -134,17 +176,21 @@ def _build_strategy(strategy: str, params: Dict[str, Any]):
 
         def fn(data):
             if len(data) < slow:
-                return None
+                return None, None
             close    = data["close"]
             ema_fast = close.ewm(span=fast,   adjust=False).mean()
             ema_slow = close.ewm(span=slow,   adjust=False).mean()
             macd     = ema_fast - ema_slow
             sig_line = macd.ewm(span=signal,  adjust=False).mean()
+            current_macd   = round(float(macd.iloc[-1]),     6)
+            current_signal = round(float(sig_line.iloc[-1]), 6)
+            
             if macd.iloc[-1] > sig_line.iloc[-1] and macd.iloc[-2] <= sig_line.iloc[-2]:
-                return "buy"
+                return ("buy", f"BUY - MACD ({current_macd}) crossed above signal line ({current_signal}) - bullish momentum")
             if macd.iloc[-1] < sig_line.iloc[-1] and macd.iloc[-2] >= sig_line.iloc[-2]:
-                return "sell"
-            return None
+                return ("sell", f"SELL - MACD ({current_macd}) crossed below signal line ({current_signal}) - bearish momentum")
+            return None, None
+        
         return fn
 
     else:
@@ -184,7 +230,7 @@ class BacktestService:
         data_source:       str = "auto",
     ) -> Dict[str, Any]:
         """
-        Full backtest pipeline.
+        Full parameterized backtest pipeline.
 
         Args:
             user_id:           Supabase auth user UUID
@@ -473,12 +519,12 @@ except Exception as e:
             code_file.write(wrapper)
             code_file.close()
 
-            # ── Run in subprocess with hard 30-second timeout ─────────────────
+            # ── Run in subprocess with hard 40-second timeout ─────────────────
             result = subprocess.run(
                 ["python", code_file.name],
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=40,
             )
 
            
@@ -516,7 +562,7 @@ except Exception as e:
 
         except subprocess.TimeoutExpired:
             raise BacktestExecutionTimeoutError(
-                "Strategy execution timed out (30 s limit). "
+                "Strategy execution timed out (40 s limit). "
                 "Simplify your logic or reduce the date range."
             )
 
@@ -600,6 +646,7 @@ except Exception as e:
                     "net_pnl":        round(net_pnl, 6),
                     "return_pct":     round((gross_pnl / entry_price) * 100, 4),
                     "quantity":       1.0,
+                    "signal_reason":  None,   # not applicable for custom code
                     # Cost fields — zero for custom strategies
                     "spread_cost":    0.0,
                     "slippage_cost":  0.0,
