@@ -40,6 +40,7 @@ async def run_backtest(request: RunBacktestRequest,
     fetch data → run engine → calculate metrics → save to Supabase.
     """
     try:
+        _assert_user_access(request.user_id, user)
         result = await service.run_backtest(
             user_id=request.user_id,
             strategy_id=request.strategy_id,
@@ -71,11 +72,12 @@ async def run_backtest(request: RunBacktestRequest,
 async def get_user_backtests(
     user_id: str,
     pair:    Optional[str] = None,
-    limit:   int = 20,
+    limit:   int = 100,
     user: JWTPayload = Depends(get_current_user),
 ):
     """Get all completed backtests for a user, newest first."""
     try:
+        _assert_user_access(user_id, user)
         return await service.get_user_backtests(user_id, pair=pair, limit=limit)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -87,6 +89,7 @@ async def get_user_backtests(
 async def get_backtest(backtest_id: str, user_id: str, user: JWTPayload = Depends(get_current_user),):
     """Get full detail of a single backtest including metrics and equity curve."""
     try:
+        _assert_user_access(user_id, user)
         backtest = await service.get_backtest_by_id(backtest_id, user_id)
         if backtest is None:
             raise HTTPException(status_code=404, detail="Backtest not found")
@@ -109,6 +112,7 @@ async def get_backtest_trades(
 ):
     """Get individual trade log for a backtest."""
     try:
+        _assert_user_access(user_id, user)
         trades = await service.get_backtest_trades(
             backtest_id, user_id, limit=limit, offset=offset
         )
@@ -123,6 +127,7 @@ async def get_backtest_trades(
 async def delete_backtest(backtest_id: str, user_id: str, user: JWTPayload = Depends(get_current_user),):
     """Delete a saved backtest."""
     try:
+        _assert_user_access(user_id, user)
         deleted = await service.delete_backtest(backtest_id, user_id)
         if not deleted:
             raise HTTPException(status_code=404, detail="Backtest not found")

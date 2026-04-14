@@ -35,6 +35,8 @@ from services.ai_errors import AIServiceUnavailableError, is_temporary_ai_unavai
 
 logger = logging.getLogger(__name__)
 
+_MIN_MENTOR_RESPONSE_LENGTH = 40
+
 
 def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -211,7 +213,7 @@ class MentorService:
     def list_user_conversations(
         self,
         user_id: str,
-        limit:   int = 20,
+        limit:   int = 100,
     ) -> List[Dict]:
         """List all conversations for a user."""
         try:
@@ -515,10 +517,13 @@ Metrics:
                     model       = self.model_id,
                     messages    = messages,
                     max_tokens  = max_tokens,
-                    temperature = 0.7,
+                    temperature = 0.4,
                     top_p       = 0.9,
                 )
-                return response.choices[0].message.content
+                text = self._clean_response_text(response.choices[0].message.content)
+                if len(text) < _MIN_MENTOR_RESPONSE_LENGTH:
+                    raise ValueError("Mentor returned an empty or incomplete response.")
+                return text
 
             except Exception as e:
                 last_error = e
@@ -616,7 +621,7 @@ Metrics:
                     model       = self.model_id,
                     messages    = messages,
                     max_tokens  = max_tokens,
-                    temperature = 0.7,
+                    temperature = 0.4,
                     top_p       = 0.9,
                 ) as stream:
                     async for event in stream:
@@ -641,6 +646,18 @@ Metrics:
         fallback_text = await self._generate_response(messages, max_tokens=max_tokens)
         async for chunk in self._yield_fallback_chunks(fallback_text):
             yield chunk
+
+    @staticmethod
+    def _clean_response_text(text: Optional[str]) -> str:
+        if not text:
+            return ""
+
+        parts = [part.strip() for part in re.split(r"\n\s*\n", text) if part.strip()]
+        deduped_parts: List[str] = []
+        for part in parts:
+            if not deduped_parts or part != deduped_parts[-1]:
+                deduped_parts.append(part)
+        return "\n\n".join(deduped_parts).strip()
 
     async def _yield_fallback_chunks(
         self,

@@ -61,6 +61,14 @@ def _make_serializable(obj):
     return obj
 
 
+def _first_param(params: Dict[str, Any], *names: str, default: Any = None) -> Any:
+    """Return the first non-empty parameter value from a list of aliases."""
+    for name in names:
+        if name in params and params[name] is not None:
+            return params[name]
+    return default
+
+
 # ============================================================================
 # STRATEGY BUILDER
 # Returns a callable compatible with BacktestEngine.run_backtest()
@@ -89,9 +97,21 @@ def _build_strategy(strategy: str, params: Dict[str, Any]):
     # -------------------------------------------------------------------------
 
     if strategy == "rsi":
-        period     = params.get("period", 14)
-        oversold   = params.get("oversold", 30)
-        overbought = params.get("overbought", 70)
+        period = int(_first_param(params, "period", "rsi_period", default=14))
+        oversold = float(_first_param(
+            params,
+            "oversold",
+            "lower_threshold",
+            "buy_threshold",
+            default=30,
+        ))
+        overbought = float(_first_param(
+            params,
+            "overbought",
+            "upper_threshold",
+            "sell_threshold",
+            default=70,
+        ))
 
         def fn(data):
             if len(data) < period + 1:
@@ -116,11 +136,26 @@ def _build_strategy(strategy: str, params: Dict[str, Any]):
     # -------------------------------------------------------------------------
     
     elif strategy == "moving_average_crossover":
-        fast = params.get("fast_period", 50)
-        slow = params.get("slow_period", 200)
+        fast = int(_first_param(
+            params,
+            "fast_period",
+            "fast",
+            "short_period",
+            "fast_window",
+            default=10,
+        ))
+        slow = int(_first_param(
+            params,
+            "slow_period",
+            "slow",
+            "long_period",
+            "slow_window",
+            default=30,
+        ))
 
         def fn(data):
-            if len(data) < slow:
+            required_bars = max(fast, slow) + 1
+            if len(data) < required_bars:
                 return None, None
             close   = data["close"]
             fast_ma = close.rolling(fast).mean()
@@ -341,7 +376,7 @@ class BacktestService:
         self,
         user_id: str,
         pair:    Optional[str] = None,
-        limit:   int = 20
+        limit:   int = 100
     ) -> List[Dict]:
         """List completed backtests for a user, newest first."""
         return db.backtests.list(user_id, pair=pair, limit=limit)

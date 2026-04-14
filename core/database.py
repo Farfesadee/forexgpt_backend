@@ -82,7 +82,7 @@ class MentorRepo:
     def _msg(self):  return get_db().table("mentor_messages")
 
     # Conversations
-    def list_conversations(self, user_id: str, include_archived: bool = False, limit: int = 30) -> List[dict]:
+    def list_conversations(self, user_id: str, include_archived: bool = False, limit: int = 100) -> List[dict]:
         q = (
             get_db().table("mentor_history")
             .select(
@@ -93,7 +93,7 @@ class MentorRepo:
         )
         if not include_archived:
             q = q.eq("is_archived", False)
-        return q.limit(limit).execute().data
+        return q.order("last_message_at", desc=True).limit(limit).execute().data
 
     # In your database service
     def create_conversation(self, id, user_id, title, signal_id=None):
@@ -276,10 +276,10 @@ class BacktestsRepo:
                 for i, t in enumerate(trades)]
         self._tr.insert(rows).execute()
 
-    def list(self, user_id: str, pair: Optional[str] = None, limit: int = 20) -> List[dict]:
+    def list(self, user_id: str, pair: Optional[str] = None, limit: int = 100) -> List[dict]:
         q = (
             self._bt.select(
-                "id, strategy_id, pair, start_date, end_date, timeframe, "
+                "id, strategy_id, strategy_name, pair, start_date, end_date, timeframe, "
                 "initial_capital, status, total_return_pct, sharpe_ratio, "
                 "max_drawdown_pct, win_rate_pct, total_trades, is_saved, created_at"
             ).eq("user_id", user_id).eq("status", "completed")
