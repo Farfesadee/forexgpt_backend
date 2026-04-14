@@ -488,6 +488,7 @@ DB calls use public.generated_codes and public.codegen_conversations.
 
 import uuid
 import asyncio
+import re
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any
 from prompts.codegen_prompt import CODEGEN_SYSTEM_PROMPT
@@ -501,6 +502,14 @@ from services.ai_errors import (
 )
 
 logger = logging.getLogger(__name__)
+
+_PROMPT_ECHO_MARKERS = (
+    "ORIGINAL CODE:",
+    "BACKTEST RESULTS:",
+    "EXPERT ANALYSIS:",
+    "ADDITIONAL REQUIREMENTS:",
+    "Please improve this strategy.",
+)
 
 
 def _normalize_timestamp(value) -> str:
@@ -562,6 +571,9 @@ class CodeGenService:
         conversation_id: Optional[str] = None,
         previous_code: Optional[str] = None,
         error_message: Optional[str] = None,
+        llm_user_message: Optional[str] = None,
+        stored_user_message: Optional[str] = None,
+        stored_description: Optional[str] = None,
     ) -> Dict:
         """
         Generate, debug, or modify trading strategy code.
@@ -582,21 +594,23 @@ class CodeGenService:
                 conversation_id = str(uuid.uuid4())
                 history = []
 
-            user_message = self._build_user_message(
+            llm_message = llm_user_message or self._build_user_message(
                 strategy_description, previous_code, error_message
             )
+            persisted_user_message = stored_user_message or llm_message
+            persisted_description = stored_description or strategy_description
 
             messages = [
                 {"role": "system", "content": self.system_prompt},
                 *history,
-                {"role": "user", "content": user_message},
+                {"role": "user", "content": llm_message},
             ]
 
             response = await self._generate_response(messages)
             code, explanation = self._parse_response(response)
 
             # Persist conversation turns
-            self._save_message(conversation_id, user_id, "user", user_message)
+            self._save_message(conversation_id, user_id, "user", persisted_user_message)
             self._save_message(conversation_id, user_id, "assistant", response)
 
             # Save generated code to generated_codes table
@@ -607,7 +621,7 @@ class CodeGenService:
                     "user_id":         user_id,
                     "conversation_id": conversation_id,
                     "code":            code,
-                    "description":     strategy_description,
+                    "description":     persisted_description,
                     "created_at":      datetime.utcnow().isoformat(),
                 })
                 .execute()
@@ -628,7 +642,7 @@ class CodeGenService:
             logger.error(f"Error in generate_code: {e}", exc_info=True)
             raise
 
-    async def list_generated_codes(self, user_id: str, limit: int = 20) -> List[Dict]:
+    async def list_generated_codes(self, user_id: str, limit: int = 100) -> List[Dict]:
         """List all generated strategy codes for a user (most recent first)."""
         try:
             result = (
@@ -714,31 +728,21 @@ class CodeGenService:
             history = self._load_history(conversation_id, user_id)
             if history is None:
                 return None
-            
-            # Fetch codes for this conversation to attach to assistant messages
-            codes_res = (
-                get_db().table("generated_codes")
-                .select("code, created_at")
-                .eq("conversation_id", conversation_id)
-                .order("created_at")
-                .execute()
-            )
-            codes = codes_res.data or []
-            
+
             result = []
-            code_idx = 0
             for m in history:
+                extracted_code = None
+                if m["role"] == "assistant":
+                    extracted_code, _ = self._parse_response(m["content"])
+                    if not extracted_code or extracted_code == m["content"].strip():
+                        extracted_code = None
+
                 msg = {
                     "role":      m["role"],
                     "content":   m["content"],
                     "timestamp": _normalize_timestamp(m.get("timestamp")),
-                    "code":      None,
+                    "code":      extracted_code,
                 }
-                if m["role"] == "assistant":
-                    if code_idx < len(codes):
-                        msg["code"] = codes[code_idx]["code"]
-                        code_idx += 1
-
                 result.append(msg)
 
             return result
@@ -797,15 +801,22 @@ class CodeGenService:
             mentor_analysis=mentor_analysis,
             additional_requirements=additional_requirements
         )
-        
-        # Call generate_code() with this message as the strategy description
-        # generate_code() handles everything else: Mistral call, DB saving, parsing
+        stored_summary = self._build_improvement_summary(
+            backtest_results=backtest_results,
+            additional_requirements=additional_requirements,
+        )
+
+        # Keep the full prompt for the LLM, but persist a concise user-facing summary
+        # so the frontend does not prefill the entire mentor response later.
         result = await self.generate_code(
             user_id=user_id,
-            strategy_description=improvement_message,
-            conversation_id=conversation_id
+            strategy_description=stored_summary,
+            conversation_id=conversation_id,
+            llm_user_message=improvement_message,
+            stored_user_message=stored_summary,
+            stored_description=stored_summary,
         )
-        
+
         return result
 
 
@@ -904,6 +915,8 @@ class CodeGenService:
 
     def _parse_response(self, response: str) -> Tuple[str, str]:
         """Split model response into (code, explanation)."""
+        response = self._clean_response_text(response)
+
         if "```python" in response:
             start = response.find("```python") + len("```python")
             end   = response.find("```", start)
@@ -934,9 +947,14 @@ class CodeGenService:
                         temperature=0.3,
                         top_p=0.9,
                     )
+                    cleaned_text = self._clean_response_text(
+                        response.choices[0].message.content
+                    )
+                    if not cleaned_text:
+                        raise ValueError("Code generation returned an empty response.")
                     if model_id != self.model_id:
                         logger.info("Codegen request succeeded with fallback model %s", model_id)
-                    return response.choices[0].message.content
+                    return cleaned_text
                 except Exception as e:
                     last_error = e
                     is_capacity_error = is_capacity_exceeded_error(e)
@@ -1017,3 +1035,48 @@ Provide:
 3. Expected improvements in metrics"""
     
         return message
+
+    def _build_improvement_summary(
+        self,
+        backtest_results: Dict[str, Any],
+        additional_requirements: Optional[str] = None,
+    ) -> str:
+        strategy_name = backtest_results.get("strategy_name") or "strategy"
+        pair = backtest_results.get("pair") or "selected pair"
+        total_return = backtest_results.get("total_return_pct")
+        summary = (
+            f"Improve my {strategy_name} strategy for {pair} "
+            f"based on the latest backtest and mentor feedback"
+        )
+        if total_return is not None:
+            summary += f" (return: {total_return}%)"
+        if additional_requirements:
+            summary += f". Extra requirements: {additional_requirements}"
+        return summary
+
+    def _clean_response_text(self, response: Optional[str]) -> str:
+        text = (response or "").strip()
+        if not text:
+            return ""
+
+        text = self._collapse_duplicate_paragraphs(text)
+
+        first_code_block = text.find("```")
+        if first_code_block > 0:
+            prefix = text[:first_code_block]
+            if any(marker in prefix for marker in _PROMPT_ECHO_MARKERS):
+                text = text[first_code_block:].lstrip()
+
+        return text.strip()
+
+    @staticmethod
+    def _collapse_duplicate_paragraphs(text: str) -> str:
+        parts = [part.strip() for part in re.split(r"\n\s*\n", text) if part.strip()]
+        if not parts:
+            return text.strip()
+
+        deduped_parts: List[str] = []
+        for part in parts:
+            if not deduped_parts or part != deduped_parts[-1]:
+                deduped_parts.append(part)
+        return "\n\n".join(deduped_parts)

@@ -421,11 +421,11 @@ async def ask_question(
 
 @router.get("/conversations", response_model=list[ConversationSummaryResponse])
 async def list_conversations_for_current_user(
-    limit: int = 20,
+    limit: int = 100,
     user: JWTPayload = Depends(get_current_user),
 ):
     try:
-        conversations = await service.list_user_conversations(user.user_id, limit)
+        conversations = service.list_user_conversations(user.user_id, limit)
         return conversations
     except HTTPException:
         raise
@@ -433,15 +433,15 @@ async def list_conversations_for_current_user(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/conversations/{user_id}", response_model=list[ConversationSummaryResponse])
+@router.get("/conversations/user/{user_id}", response_model=list[ConversationSummaryResponse])
 async def list_conversations(
     user_id: str,
-    limit: int = 20,
+    limit: int = 100,
     user: JWTPayload = Depends(get_current_user),
 ):
     try:
         _assert_user_access(user_id, user)
-        conversations = await service.list_user_conversations(user_id, limit)
+        conversations = service.list_user_conversations(user_id, limit)
         return conversations
     except HTTPException:
         raise
@@ -455,7 +455,7 @@ async def get_conversation_for_current_user(
     user: JWTPayload = Depends(get_current_user),
 ):
     try:
-        history = await service.get_conversation_history(conversation_id, user.user_id)
+        history = service.get_conversation_history(conversation_id, user.user_id)
         if history is None:
             raise HTTPException(status_code=404, detail="Conversation not found")
         return {
@@ -477,7 +477,7 @@ async def get_conversation(
 ):
     try:
         _assert_user_access(user_id, user)
-        history = await service.get_conversation_history(conversation_id, user_id)
+        history = service.get_conversation_history(conversation_id, user_id)
         if history is None:
             raise HTTPException(status_code=404, detail="Conversation not found")
         return {

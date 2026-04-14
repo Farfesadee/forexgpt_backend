@@ -74,6 +74,7 @@ class GenerateCodeResponse(BaseModel):
     code: str
     explanation: str
     conversation_id: str
+    code_id: Optional[str] = None
     language: str
     timestamp: str
 

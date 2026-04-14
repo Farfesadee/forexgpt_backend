@@ -81,7 +81,7 @@ async def generate_code(
 @router.get("/codes/{user_id}", response_model=list[GeneratedCodeSummaryResponse])
 async def list_generated_codes(
     user_id: str,
-    limit: int = 20,
+    limit: int = 100,
     user: JWTPayload = Depends(get_current_user),
     service = Depends(get_codegen_service),
 ):

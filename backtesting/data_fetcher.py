@@ -324,7 +324,7 @@ class DataFetcher:
         except ImportError:
             raise ImportError("Run: pip install yfinance")
 
-        ticker = self.YFINANCE_SYMBOL_MAP.get(symbol, symbol)
+        ticker = self._to_yfinance_ticker(symbol)
         logger.info(f"yfinance: downloading {ticker}")
 
         df = yf.download(
@@ -430,3 +430,14 @@ class DataFetcher:
         df = df[["open", "high", "low", "close", "volume"]].copy()
         df.dropna(inplace=True)
         return df
+
+    def _to_yfinance_ticker(self, symbol: str) -> str:
+        """Convert standard forex symbols like GBPJPY to Yahoo's GBPJPY=X form."""
+        if symbol in self.YFINANCE_SYMBOL_MAP:
+            return self.YFINANCE_SYMBOL_MAP[symbol]
+
+        compact_symbol = symbol.replace("/", "").upper()
+        if len(compact_symbol) == 6 and compact_symbol.isalpha():
+            return f"{compact_symbol}=X"
+
+        return symbol

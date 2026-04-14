@@ -86,8 +86,11 @@ class RunBacktestResponse(BaseModel):
     timeframe:        str
     initial_capital:  float
     strategy_name:    str
+    strategy_config:  Optional[Dict[str, Any]] = None
     status:           str                    # "completed"
     metrics:          Optional[Dict[str, Any]]
+    educational_analysis:    Optional[str] = None
+    improvement_suggestions: Optional[List[str]] = None
     # Denormalized by DB trigger sync_backtest_on_complete:
     total_return_pct: Optional[float]
     sharpe_ratio:     Optional[float]
@@ -101,6 +104,7 @@ class SavedBacktestResponse(BaseModel):
     """Returned in list view — GET /backtest/user/{user_id}"""
     id:               str
     strategy_id:      Optional[str]
+    strategy_name:    Optional[str] = None
     pair:             str
     start_date:       str
     end_date:         str
@@ -127,9 +131,12 @@ class BacktestDetailResponse(BaseModel):
     timeframe:              str
     initial_capital:        float
     strategy_name:          str
+    strategy_config:        Optional[Dict[str, Any]] = None
     status:                 str
     metrics:                Optional[Dict[str, Any]]
     equity_curve:           Optional[List[Dict]]
+    educational_analysis:   Optional[str] = None
+    improvement_suggestions: Optional[List[str]] = None
     total_return_pct:       Optional[float]
     sharpe_ratio:           Optional[float]
     max_drawdown_pct:       Optional[float]
