@@ -22,6 +22,7 @@ Error handling:
 import json
 import numpy as np
 import logging
+import ast
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
 
@@ -88,6 +89,10 @@ def _build_strategy(strategy: str, params: Dict[str, Any]):
 
     # Accept the common shorthand used by the frontend/test prompts.
     if strategy == "sma":
+        strategy = "moving_average_crossover"
+    if strategy == "sma_cross":
+        strategy = "moving_average_crossover"
+    if strategy == "ma_cross":
         strategy = "moving_average_crossover"
     if strategy == "bollinger":
         strategy = "bollinger_bands"
@@ -473,6 +478,23 @@ class BacktestService:
         if len(code) > 10_000:
             raise ValueError(
                 "Code exceeds the 10 KB size limit. Please simplify your strategy."
+            )
+
+        try:
+            tree = ast.parse(code)
+        except SyntaxError as exc:
+            raise ValueError(
+                f"Custom strategy has invalid Python syntax: {exc.msg} "
+                f"(line {exc.lineno})."
+            ) from exc
+
+        function_names = {
+            node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+        }
+        if "generate_signals" not in function_names:
+            raise ValueError(
+                "Code must define a valid 'generate_signals(data)' function. "
+                "Put your logic and return statement inside that function."
             )
 
     # -------------------------------------------------------------------------
