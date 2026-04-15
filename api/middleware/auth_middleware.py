@@ -158,15 +158,34 @@ def _verify_jwt(token: str) -> JWTPayload:
     Raises HTTPException on any verification failure.
     """
     try:
-        if not settings.SUPABASE_JWT_SECRET:
-            logger.info("SUPABASE_JWT_SECRET not configured; using Supabase introspection.")
-            return _verify_with_supabase(token)
-
         try:
             header = jwt.get_unverified_header(token)
             alg = (header or {}).get("alg", "")
         except Exception:
             alg = ""
+
+        # When the local JWT secret is missing, prefer JWKS verification for
+        # asymmetric tokens so protected routes do not pay a Supabase auth
+        # network round-trip on every request.
+        if not settings.SUPABASE_JWT_SECRET:
+            if alg and alg.upper() != "HS256":
+                logger.info(
+                    "SUPABASE_JWT_SECRET not configured; verifying with Supabase JWKS."
+                )
+                try:
+                    return _verify_with_jwks(token, alg)
+                except HTTPException as jwks_error:
+                    logger.info(
+                        f"JWKS verification failed for alg={alg}; "
+                        "falling back to Supabase introspection."
+                    )
+                    try:
+                        return _verify_with_supabase(token)
+                    except HTTPException:
+                        raise jwks_error
+
+            logger.info("SUPABASE_JWT_SECRET not configured; using Supabase introspection.")
+            return _verify_with_supabase(token)
 
         # Supabase may issue asymmetric JWTs (e.g. RS256).
         # Verify those against the project's JWKS instead of calling get_user().
