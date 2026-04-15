@@ -87,7 +87,7 @@ def _build_strategy(strategy: str, params: Dict[str, Any]):
     strategy = strategy.lower().replace(" ", "_")
 
     # Accept the common shorthand used by the frontend/test prompts.
-    if strategy == "sma":
+    if strategy in {"sma", "sma_cross", "sma_crossover"}:
         strategy = "moving_average_crossover"
     if strategy == "bollinger":
         strategy = "bollinger_bands"
@@ -231,7 +231,7 @@ def _build_strategy(strategy: str, params: Dict[str, Any]):
     else:
         raise ValueError(
             f"Unknown strategy '{strategy}'. "
-            f"Supported: rsi, sma, moving_average_crossover, bollinger, bollinger_bands, macd"
+            f"Supported: rsi, sma, sma_cross, moving_average_crossover, bollinger, bollinger_bands, macd"
         )
 
 

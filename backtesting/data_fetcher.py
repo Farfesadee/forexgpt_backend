@@ -18,6 +18,7 @@ Usage:
 """
 
 import logging
+import time
 import pandas as pd
 from core.config import settings
 
@@ -34,6 +35,10 @@ class DataFetcher:
     3. yfinance      -- second fallback, free but unreliable for forex
     4. CSV file      -- offline fallback, no internet needed at all
     """
+
+    REQUEST_TIMEOUT_SECONDS = 12
+    SOURCE_COOLDOWN_SECONDS = 300
+    _source_disabled_until: dict[str, float] = {}
 
     # Twelve Data known pairs (others are auto-converted from EURUSD to EUR/USD)
     TWELVE_DATA_SYMBOL_MAP = {
@@ -96,7 +101,7 @@ class DataFetcher:
         symbol = symbol.upper()
 
         if source == "auto":
-            sources = ["twelvedata", "alphavantage", "yfinance", "csv"]
+            sources = self._get_auto_sources()
             last_error = None
 
             for src in sources:
@@ -111,7 +116,12 @@ class DataFetcher:
                         return df
                 except Exception as e:
                     last_error = e
-                    logger.warning(f"{src} failed: {e}. Trying next source...")
+                    self._mark_source_unhealthy(src)
+                    logger.warning(
+                        f"{src} failed: {e}. "
+                        f"Trying next source and cooling it down for "
+                        f"{self.SOURCE_COOLDOWN_SECONDS} seconds."
+                    )
 
             raise ValueError(
                 f"All data sources failed for '{symbol}'. "
@@ -124,6 +134,32 @@ class DataFetcher:
             )
         else:
             return self._fetch_from(source, symbol, start, end, interval)
+
+    def _get_auto_sources(self):
+        sources = ["twelvedata", "alphavantage", "yfinance", "csv"]
+        available_sources = []
+
+        for source in sources:
+            if source == "twelvedata" and not settings.TWELVE_DATA_KEY:
+                continue
+            if source == "alphavantage" and not settings.ALPHA_VANTAGE_KEY:
+                continue
+            if self._is_source_on_cooldown(source):
+                logger.info(f"Skipping data source on cooldown: {source}")
+                continue
+            available_sources.append(source)
+
+        return available_sources or ["yfinance", "csv"]
+
+    @classmethod
+    def _is_source_on_cooldown(cls, source: str) -> bool:
+        return cls._source_disabled_until.get(source, 0) > time.time()
+
+    @classmethod
+    def _mark_source_unhealthy(cls, source: str) -> None:
+        if source in {"yfinance", "csv"}:
+            return
+        cls._source_disabled_until[source] = time.time() + cls.SOURCE_COOLDOWN_SECONDS
 
     def _fetch_from(self, source, symbol, start, end, interval):
         """Route to the correct source."""
@@ -193,7 +229,7 @@ class DataFetcher:
         )
 
         logger.info(f"Twelve Data: fetching {symbol} ({td_symbol})")
-        response = requests.get(url, timeout=30)
+        response = requests.get(url, timeout=self.REQUEST_TIMEOUT_SECONDS)
         data = response.json()
 
         if data.get("status") == "error":
@@ -275,7 +311,7 @@ class DataFetcher:
         )
 
         logger.info(f"Alpha Vantage: fetching {symbol} ({from_currency}/{to_currency})")
-        response = requests.get(url, timeout=30)
+        response = requests.get(url, timeout=self.REQUEST_TIMEOUT_SECONDS)
         data = response.json()
 
         if "Time Series FX (Daily)" not in data:

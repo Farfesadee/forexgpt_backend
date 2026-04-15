@@ -146,6 +146,16 @@ class MentorService:
                     logger.warning(f"Unauthorized access to conversation {conversation_id}")
                     raise PermissionError("Conversation not found or unauthorized.")
 
+                # The frontend may optimistically generate a conversation_id
+                # before the first message is persisted. Ensure the parent
+                # conversation row exists before saving messages.
+                if not self._conversation_exists(conversation_id):
+                    self.db.mentor.create_conversation(
+                        id      = conversation_id,
+                        user_id = user_id,
+                        title   = None,
+                    )
+
             else:
                 logger.info(f"Starting new conversation for user {user_id}")
                 conversation_id = str(uuid.uuid4())
