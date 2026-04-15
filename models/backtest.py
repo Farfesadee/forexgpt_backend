@@ -16,7 +16,7 @@ from datetime import datetime
 class RunBacktestRequest(BaseModel):
     user_id:           str
     pair:              str   = Field(..., description="e.g. EURUSD, GBPUSD")
-    strategy_name:     str   = Field(..., description="rsi | sma | moving_average_crossover | bollinger | bollinger_bands | macd")
+    strategy_name:     str   = Field(..., description="rsi | sma | sma_cross | moving_average_crossover | bollinger | bollinger_bands | macd")
     start_date:        str   = Field(..., description="YYYY-MM-DD")
     end_date:          str   = Field(..., description="YYYY-MM-DD")
     strategy_id:       Optional[str]   = Field(default=None, description="FK to strategies table")

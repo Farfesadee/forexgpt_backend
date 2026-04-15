@@ -79,6 +79,8 @@ async def start_conversation(
         return AskQuestionResponse(**result)
     except AIServiceUnavailableError:
         raise
+    except PermissionError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -104,6 +106,8 @@ async def ask_question(
         return AskQuestionResponse(**result)
     except AIServiceUnavailableError:
         raise
+    except PermissionError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -127,6 +131,8 @@ async def ask_question_simple(
         return AskQuestionResponse(**result)
     except AIServiceUnavailableError:
         raise
+    except PermissionError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -343,6 +349,9 @@ async def ask_stream(
             yield "data: [DONE]\n\n"
         except AIServiceUnavailableError as e:
             yield f"data: {json.dumps({'error': str(e), 'error_type': 'ai_service_unavailable', 'retry_after': e.retry_after_seconds})}\n\n"
+            yield "data: [DONE]\n\n"
+        except PermissionError as e:
+            yield f"data: {json.dumps({'error': str(e), 'error_type': 'conversation_not_found'})}\n\n"
             yield "data: [DONE]\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
