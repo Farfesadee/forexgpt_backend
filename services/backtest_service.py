@@ -23,6 +23,8 @@ import json
 import numpy as np
 import logging
 import ast
+import textwrap
+import re
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
 
@@ -38,6 +40,89 @@ logger = logging.getLogger(__name__)
 
 class BacktestExecutionTimeoutError(RuntimeError):
     """Raised when sandboxed custom strategy execution exceeds the time limit."""
+
+
+_CODE_LINE_RE = re.compile(
+    r"^\s*(from\s+\w+\s+import|import\s+\w+|def\s+\w+|class\s+\w+|@|#|[A-Za-z_]\w*\s*=)"
+)
+
+
+def _is_parseable_python(text: str) -> bool:
+    try:
+        ast.parse(text)
+        return True
+    except SyntaxError:
+        return False
+
+
+def _extract_parseable_code(text: str) -> str:
+    """
+    Recover the real Python block from mixed AI output.
+
+    Handles cases where the payload accidentally includes prose before/after
+    the strategy code even though the caller expected pure Python.
+    """
+    lines = text.splitlines()
+    candidate_starts = [0]
+    candidate_starts.extend(
+        idx for idx, line in enumerate(lines) if _CODE_LINE_RE.match(line)
+    )
+
+    seen: set[int] = set()
+    for start_idx in candidate_starts:
+        if start_idx in seen:
+            continue
+        seen.add(start_idx)
+
+        candidate = textwrap.dedent("\n".join(lines[start_idx:])).strip()
+        if not candidate or "def generate_signals" not in candidate:
+            continue
+
+        if _is_parseable_python(candidate):
+            return candidate
+
+        candidate_lines = candidate.splitlines()
+        for end_idx in range(len(candidate_lines) - 1, 0, -1):
+            trimmed = "\n".join(candidate_lines[:end_idx]).strip()
+            if "def generate_signals" not in trimmed:
+                continue
+            if _is_parseable_python(trimmed):
+                return trimmed
+
+    return text
+
+
+def _normalize_custom_code(code: str) -> str:
+    """Strip markdown fences and leading indentation from generated code."""
+    text = (code or "").replace("\r\n", "\n").strip()
+    if not text:
+        return ""
+
+    if "```python" in text:
+        start = text.find("```python") + len("```python")
+        end = text.find("```", start)
+        if end != -1:
+            text = text[start:end]
+    elif "```" in text:
+        start = text.find("```") + 3
+        end = text.find("```", start)
+        if end != -1:
+            text = text[start:end]
+
+    text = textwrap.dedent(text).strip()
+    
+    # ── Extract parseable code only as fallback for mixed AI output ────────
+    # Note: _extract_parseable_code may trim lines to make code parseable,
+    # so it should only be used if the stripped markdown code doesn't work.
+    # Try parsing the stripped code first before attempting extraction.
+    try:
+        ast.parse(text)
+        # Code is parseable as-is, return it
+        return text
+    except SyntaxError:
+        # Code has syntax errors, try extracting from mixed content
+        # This will attempt to find the longest parseable block
+        return _extract_parseable_code(text).strip()
 
 
 # ============================================================================
@@ -448,6 +533,9 @@ class BacktestService:
 
         Checks for dangerous operations and enforces the
         generate_signals(data) contract.
+        
+        This should be called on RAW code before normalization to catch
+        syntax errors in the original submission, not in extracted code.
 
         Raises:
             ValueError: if code is unsafe or missing the required function.
@@ -460,6 +548,9 @@ class BacktestService:
             "shutil.",     "pathlib.",    "importlib",
         ]
 
+        code = code.strip() if code else ""
+        
+        # Check for forbidden operations in the raw code
         code_lower = code.lower()
         for token in FORBIDDEN:
             if token.lower() in code_lower:
@@ -468,6 +559,7 @@ class BacktestService:
                     f"Only pandas and numpy are allowed."
                 )
 
+        # Check for required function definition
         if "def generate_signals" not in code:
             raise ValueError(
                 "Code must define a 'generate_signals(data)' function. "
@@ -475,19 +567,23 @@ class BacktestService:
                 "Series of signals: 1 = BUY, -1 = SELL, 0 = HOLD."
             )
 
+        # Check code size BEFORE processing
         if len(code) > 10_000:
             raise ValueError(
                 "Code exceeds the 10 KB size limit. Please simplify your strategy."
             )
 
+        # PRIMARY SYNTAX CHECK: Parse raw code to catch all syntax errors
+        # This catches errors like 'continue' not in loop, invalid indentation, etc.
         try:
             tree = ast.parse(code)
         except SyntaxError as exc:
             raise ValueError(
                 f"Custom strategy has invalid Python syntax: {exc.msg} "
-                f"(line {exc.lineno})."
+                f"(line {exc.lineno}). Please fix the code and try again."
             ) from exc
 
+        # Verify function exists and is valid
         function_names = {
             node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
         }
@@ -592,12 +688,20 @@ except Exception as e:
                 try:
                     output = json.loads(result.stdout)
                     if not output.get("success"):
-                        raise ValueError(f"Strategy error: {output.get('error', 'unknown error')}")
+                        raise ValueError(f"Strategy execution error: {output.get('error', 'unknown error')}")
                 except (json.JSONDecodeError, KeyError):
                     err = result.stderr.strip().splitlines()
-                    raise ValueError(
-                        f"Strategy execution failed: {err[-1] if err else result.stderr}"
-                    )
+                    error_msg = err[-1] if err else result.stderr
+                    
+                    # Provide more helpful error messages for common issues
+                    if "SyntaxError:" in error_msg:
+                        raise ValueError(
+                            f"Strategy has a syntax error: {error_msg}. "
+                            f"Please check your code for common issues like 'continue' or 'break' "
+                            f"outside of loops, missing colons, or incorrect indentation."
+                        )
+                    else:
+                        raise ValueError(f"Strategy execution failed: {error_msg}")
 
             # Parse output
             try:
@@ -802,9 +906,13 @@ except Exception as e:
         """
         pair = pair.upper()
 
-        # ── Step 1: Validate code safety ──────────────────────────────────────
+        # ── Step 1: Validate code safety (BEFORE normalization) ────────────────
         # Raises ValueError immediately — no DB row created yet
+        # Validate raw code first to catch syntax errors in original submission
         self._validate_code_safety(custom_code)
+        
+        # Only normalize AFTER validation passes
+        custom_code = _normalize_custom_code(custom_code)
 
         logger.info(
             f"Custom backtest: {pair} [{start_date} -> {end_date}] user={user_id}"
