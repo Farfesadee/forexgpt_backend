@@ -25,6 +25,10 @@ import logging
 import ast
 import textwrap
 import re
+import subprocess
+import tempfile
+import os
+import pandas as pd
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
 
@@ -527,6 +531,23 @@ class BacktestService:
     # CUSTOM STRATEGY — PRIVATE HELPERS
     # =========================================================================
 
+    def _normalize_code(self, code: str) -> str:
+        """
+        Normalize LLM-generated code indentation.
+        Fixes mixed tabs/spaces which cause IndentationError in Python 3.
+        Called before both validation and execution.
+        """
+        # Normalize line endings
+        code = code.replace('\r\n', '\n').replace('\r', '\n')
+
+        # Convert ALL tabs to 4 spaces — fixes mixed tab/space indentation
+        code = code.expandtabs(4)
+
+        # Remove consistent leading whitespace from the whole block
+        code = textwrap.dedent(code)
+
+        return code.strip()
+    
     def _validate_code_safety(self, code: str) -> None:
         """
         Security gate for user-submitted strategy code.
@@ -549,6 +570,8 @@ class BacktestService:
         ]
 
         code = code.strip() if code else ""
+        
+        code = self._normalize_code(code)
         
         # Check for forbidden operations in the raw code
         code_lower = code.lower()
@@ -595,11 +618,28 @@ class BacktestService:
 
     # -------------------------------------------------------------------------
 
+    def _normalize_code(self, code: str) -> str:
+        """
+        Normalize LLM-generated code indentation.
+        Fixes mixed tabs/spaces which cause IndentationError in Python 3.
+        Called before both validation and execution.
+        """
+        # Normalize line endings
+        code = code.replace('\r\n', '\n').replace('\r', '\n')
+
+        # Convert ALL tabs to 4 spaces — fixes mixed tab/space indentation
+        code = code.expandtabs(4)
+
+        # Remove consistent leading whitespace from the whole block
+        code = textwrap.dedent(code)
+
+        return code.strip()
+    
     async def _execute_strategy_code(
         self,
         code: str,
         data,           # pd.DataFrame with lowercase columns incl. 'close'
-    ):
+    ) -> None:
         """
         Execute user strategy code in an isolated subprocess.
 
@@ -614,11 +654,8 @@ class BacktestService:
             ValueError: strategy execution error (shown to user).
             Exception:  timeout or output parsing failure.
         """
-        import subprocess
-        import tempfile
-        import os
-        import pandas as pd
-
+        
+        code = self._normalize_code(code)
         data_file = tempfile.NamedTemporaryFile(
             mode="w", suffix=".json", delete=False, encoding="utf-8"
         )
@@ -906,13 +943,15 @@ except Exception as e:
         """
         pair = pair.upper()
 
+        custom_code = self._normalize_code(custom_code)
+        
         # ── Step 1: Validate code safety (BEFORE normalization) ────────────────
         # Raises ValueError immediately — no DB row created yet
         # Validate raw code first to catch syntax errors in original submission
         self._validate_code_safety(custom_code)
         
-        # Only normalize AFTER validation passes
-        custom_code = _normalize_custom_code(custom_code)
+        # # Only normalize AFTER validation passes
+        # custom_code = _normalize_custom_code(custom_code)
 
         logger.info(
             f"Custom backtest: {pair} [{start_date} -> {end_date}] user={user_id}"
