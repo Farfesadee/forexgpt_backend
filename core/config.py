@@ -29,6 +29,7 @@ class Settings(BaseSettings):
 
     # Model IDs
     MISTRAL_MODEL_ID: str = "mistral-small-latest"
+    CODEGEN_MODEL_ID: str = "codestral-latest" 
     MISTRAL_FALLBACK_MODEL_IDS: str = ""
     SIGNAL_MODEL_ID: str = "forexgpt/forexgpt-mistral-7b-forex-signals-v1.0"
 
