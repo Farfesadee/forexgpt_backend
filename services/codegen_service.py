@@ -593,7 +593,7 @@ class CodeGenService:
     def __init__(
         self,
         mistral_client,
-        model_id: str = "mistral-small-latest",
+        model_id: str = "codestral-latest",
         fallback_model_ids: Optional[List[str]] = None,
     ):
         self.client        = mistral_client
@@ -962,6 +962,60 @@ class CodeGenService:
                 f"- Make it backtesting-ready\n"
                 f"- Include docstrings and comments"
             )
+        
+    def _normalize_code(self, code: str) -> str:
+        """
+        Auto-fix common indentation errors from LLM-generated code.
+        Specifically targets lines that dropped to column 0 inside a function body.
+        """
+        import ast
+
+        # First try — if code is already valid, return as-is
+        try:
+            ast.parse(code)
+            return code
+        except SyntaxError:
+            pass
+
+        lines = code.split("\n")
+        fixed = []
+        indent_stack = [0]  # track expected indentation levels
+        inside_function = False
+        expected_indent = 0
+
+        for i, line in enumerate(lines):
+            stripped = line.lstrip()
+
+            # Blank lines pass through
+            if not stripped:
+                fixed.append(line)
+                continue
+
+            current_indent = len(line) - len(stripped)
+
+            # Detect function/class definition — sets context
+            if stripped.startswith(("def ", "class ")):
+                inside_function = True
+                expected_indent = current_indent + 4
+                indent_stack = [current_indent]
+                fixed.append(line)
+                continue
+
+            # If inside a function and line dropped to column 0 unexpectedly
+            if inside_function and current_indent == 0 and not stripped.startswith(("def ", "class ", "#", "@")):
+                # Re-indent to expected level
+                fixed.append(" " * expected_indent + stripped)
+            else:
+                fixed.append(line)
+
+        fixed_code = "\n".join(fixed)
+
+        # Validate — if still broken, return original and let it fail naturally
+        try:
+            ast.parse(fixed_code)
+            return fixed_code
+        except SyntaxError:
+            return code
 
     def _parse_response(self, response: str) -> Tuple[str, str]:
         """Split model response into (code, explanation)."""
@@ -980,6 +1034,8 @@ class CodeGenService:
         else:
             code        = _sanitize_generated_code(response)
             explanation = "Generated trading strategy code."
+
+        code = self._normalize_code(code)
         return code, explanation
 
     async def _generate_response(self, messages: List[Dict]) -> str:
