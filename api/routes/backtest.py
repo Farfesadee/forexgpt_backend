@@ -12,10 +12,13 @@ from models.backtest import (
     SavedBacktestResponse,
     BacktestDetailResponse,
     DeleteBacktestResponse,
+    RunCustomBacktestRequest,      
+    RunCustomBacktestResponse,
 )
 from core.dependencies import get_backtest_service
 from api.middleware.auth_middleware import get_current_user
 from models.user import JWTPayload
+from services.backtest_service import BacktestExecutionTimeoutError
 
 router  = APIRouter(prefix="/backtest", tags=["backtest"])
 service = get_backtest_service()
@@ -37,6 +40,7 @@ async def run_backtest(request: RunBacktestRequest,
     fetch data → run engine → calculate metrics → save to Supabase.
     """
     try:
+        _assert_user_access(request.user_id, user)
         result = await service.run_backtest(
             user_id=request.user_id,
             strategy_id=request.strategy_id,
@@ -68,11 +72,12 @@ async def run_backtest(request: RunBacktestRequest,
 async def get_user_backtests(
     user_id: str,
     pair:    Optional[str] = None,
-    limit:   int = 20,
+    limit:   int = 100,
     user: JWTPayload = Depends(get_current_user),
 ):
     """Get all completed backtests for a user, newest first."""
     try:
+        _assert_user_access(user_id, user)
         return await service.get_user_backtests(user_id, pair=pair, limit=limit)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -84,6 +89,7 @@ async def get_user_backtests(
 async def get_backtest(backtest_id: str, user_id: str, user: JWTPayload = Depends(get_current_user),):
     """Get full detail of a single backtest including metrics and equity curve."""
     try:
+        _assert_user_access(user_id, user)
         backtest = await service.get_backtest_by_id(backtest_id, user_id)
         if backtest is None:
             raise HTTPException(status_code=404, detail="Backtest not found")
@@ -106,6 +112,7 @@ async def get_backtest_trades(
 ):
     """Get individual trade log for a backtest."""
     try:
+        _assert_user_access(user_id, user)
         trades = await service.get_backtest_trades(
             backtest_id, user_id, limit=limit, offset=offset
         )
@@ -120,6 +127,7 @@ async def get_backtest_trades(
 async def delete_backtest(backtest_id: str, user_id: str, user: JWTPayload = Depends(get_current_user),):
     """Delete a saved backtest."""
     try:
+        _assert_user_access(user_id, user)
         deleted = await service.delete_backtest(backtest_id, user_id)
         if not deleted:
             raise HTTPException(status_code=404, detail="Backtest not found")
@@ -127,4 +135,50 @@ async def delete_backtest(backtest_id: str, user_id: str, user: JWTPayload = Dep
     except HTTPException:
         raise
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Run a custom strategy backtest ───────────────────────────────────────────
+
+@router.post("/run/custom", response_model=RunCustomBacktestResponse)
+async def run_custom_backtest(
+    request: RunCustomBacktestRequest,
+    user:    JWTPayload = Depends(get_current_user),
+):
+    """
+    Execute user-generated strategy code against historical price data.
+
+    The code must define a generate_signals(data) function.
+    Results are saved to the backtests table with strategy_name='custom'
+    and appear in the user's backtest history alongside parameterised runs.
+
+    Flow: validate → fetch data → sandbox execute → metrics → save → return
+    """
+    _assert_user_access(request.user_id, user)
+
+    try:
+        result = await service.run_custom_strategy(
+            user_id=request.user_id,
+            custom_code=request.custom_code,
+            pair=request.pair,
+            start_date=request.start_date,
+            end_date=request.end_date,
+            timeframe=request.timeframe,
+            initial_capital=request.initial_capital,
+            position_size_pct=request.position_size_pct,
+            data_source=request.data_source,
+        )
+        return result
+
+    except ValueError as e:
+        # Code validation errors and strategy runtime errors — user's fault
+        raise HTTPException(status_code=400, detail=str(e))
+
+    except BacktestExecutionTimeoutError as e:
+        raise HTTPException(
+            status_code=status.HTTP_408_REQUEST_TIMEOUT,
+            detail=str(e),
+        ) from e
+    except Exception as e:
+        # Data fetch failures, timeout, unexpected errors
         raise HTTPException(status_code=500, detail=str(e))

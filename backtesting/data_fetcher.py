@@ -3,9 +3,10 @@ Data Fetcher for ForexGPT Backtesting
 Fetches historical OHLCV data with automatic fallback across multiple sources.
 
 Sources tried in order (when source="auto"):
-1. yfinance      — free, no API key needed (default)
-2. Alpha Vantage — free API key required, set ALPHA_VANTAGE_KEY in .env
-3. CSV file      — fully offline fallback, place file at data/{SYMBOL}.csv
+1. Twelve Data   -- primary source, 800 req/day free, set TWELVE_DATA_KEY in .env
+2. Alpha Vantage -- first fallback, 25 req/day free, set ALPHA_VANTAGE_KEY in .env
+3. yfinance      -- second fallback, free, no API key needed
+4. CSV file      -- fully offline fallback, place file at data/{SYMBOL}.csv
 
 Usage:
     fetcher = DataFetcher()
@@ -13,11 +14,13 @@ Usage:
 
     # Force a specific source:
     df = fetcher.fetch("EURUSD", "2020-01-01", "2024-01-01", source="csv")
+    df = fetcher.fetch("EURUSD", "2020-01-01", "2024-01-01", source="twelvedata")
 """
 
-import os
 import logging
+import time
 import pandas as pd
+from core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +29,29 @@ class DataFetcher:
     """
     Multi-source historical data fetcher with automatic fallback.
 
-    Sources:
-    1. yfinance      — default, free, no setup needed
-    2. Alpha Vantage — fallback if yfinance fails, needs free API key
-    3. CSV file      — offline fallback, no internet needed at all
+    Sources (in order of priority):
+    1. Twelve Data   -- primary, reliable, 800 req/day free tier
+    2. Alpha Vantage -- first fallback, reliable, 25 req/day free tier
+    3. yfinance      -- second fallback, free but unreliable for forex
+    4. CSV file      -- offline fallback, no internet needed at all
     """
+
+    REQUEST_TIMEOUT_SECONDS = 12
+    SOURCE_COOLDOWN_SECONDS = 300
+    _source_disabled_until: dict[str, float] = {}
+
+    # Twelve Data known pairs (others are auto-converted from EURUSD to EUR/USD)
+    TWELVE_DATA_SYMBOL_MAP = {
+        "EURUSD": "EUR/USD",
+        "GBPUSD": "GBP/USD",
+        "USDJPY": "USD/JPY",
+        "AUDUSD": "AUD/USD",
+        "USDCAD": "USD/CAD",
+        "USDCHF": "USD/CHF",
+        "NZDUSD": "NZD/USD",
+        "EURGBP": "EUR/GBP",
+        "EURJPY": "EUR/JPY",
+    }
 
     # Yahoo Finance ticker format for forex pairs
     YFINANCE_SYMBOL_MAP = {
@@ -58,26 +79,20 @@ class DataFetcher:
         "EURJPY": ("EUR", "JPY"),
     }
 
-    def fetch(
-        self,
-        symbol: str,
-        start: str,
-        end: str,
-        interval: str = "1d",
-        source: str = "auto"
-    ) -> pd.DataFrame:
+    def fetch(self, symbol, start, end, interval="1d", source="auto"):
         """
         Fetch OHLCV data for a symbol.
 
         Args:
-            symbol:   Currency pair e.g. "EURUSD", "GBPUSD"
+            symbol:   Currency pair e.g. "EURUSD", "GBPUSD", "GBPJPY"
             start:    Start date "YYYY-MM-DD"
             end:      End date "YYYY-MM-DD"
             interval: "1d" (daily) or "1wk" (weekly)
-            source:   "auto"        — tries all sources in order
-                      "yfinance"    — Yahoo Finance only
-                      "alphavantage"— Alpha Vantage only
-                      "csv"         — local CSV file only
+            source:   "auto"         -- tries all sources in priority order
+                      "twelvedata"   -- Twelve Data only
+                      "alphavantage" -- Alpha Vantage only
+                      "yfinance"     -- Yahoo Finance only
+                      "csv"          -- local CSV file only
 
         Returns:
             DataFrame with columns: open, high, low, close, volume
@@ -86,8 +101,7 @@ class DataFetcher:
         symbol = symbol.upper()
 
         if source == "auto":
-            # Try each source in order, fall back on failure
-            sources = ["yfinance", "alphavantage", "csv"]
+            sources = self._get_auto_sources()
             last_error = None
 
             for src in sources:
@@ -102,123 +116,182 @@ class DataFetcher:
                         return df
                 except Exception as e:
                     last_error = e
-                    logger.warning(f"{src} failed: {e}. Trying next source...")
+                    self._mark_source_unhealthy(src)
+                    logger.warning(
+                        f"{src} failed: {e}. "
+                        f"Trying next source and cooling it down for "
+                        f"{self.SOURCE_COOLDOWN_SECONDS} seconds."
+                    )
 
             raise ValueError(
                 f"All data sources failed for '{symbol}'. "
                 f"Last error: {last_error}\n"
                 f"Options:\n"
+                f"  - Add TWELVE_DATA_KEY to .env (get free key at twelvedata.com)\n"
+                f"  - Add ALPHA_VANTAGE_KEY to .env (get free key at alphavantage.co)\n"
                 f"  - Check your internet connection for yfinance\n"
-                f"  - Add ALPHA_VANTAGE_KEY to .env for Alpha Vantage\n"
                 f"  - Place data/{symbol}.csv for offline use"
             )
         else:
             return self._fetch_from(source, symbol, start, end, interval)
 
-    def _fetch_from(
-        self, source: str, symbol: str,
-        start: str, end: str, interval: str
-    ) -> pd.DataFrame:
+    def _get_auto_sources(self):
+        sources = ["twelvedata", "alphavantage", "yfinance", "csv"]
+        available_sources = []
+
+        for source in sources:
+            if source == "twelvedata" and not settings.TWELVE_DATA_KEY:
+                continue
+            if source == "alphavantage" and not settings.ALPHA_VANTAGE_KEY:
+                continue
+            if self._is_source_on_cooldown(source):
+                logger.info(f"Skipping data source on cooldown: {source}")
+                continue
+            available_sources.append(source)
+
+        return available_sources or ["yfinance", "csv"]
+
+    @classmethod
+    def _is_source_on_cooldown(cls, source: str) -> bool:
+        return cls._source_disabled_until.get(source, 0) > time.time()
+
+    @classmethod
+    def _mark_source_unhealthy(cls, source: str) -> None:
+        if source in {"yfinance", "csv"}:
+            return
+        cls._source_disabled_until[source] = time.time() + cls.SOURCE_COOLDOWN_SECONDS
+
+    def _fetch_from(self, source, symbol, start, end, interval):
         """Route to the correct source."""
-        if source == "yfinance":
-            return self._from_yfinance(symbol, start, end, interval)
+        if source == "twelvedata":
+            return self._from_twelvedata(symbol, start, end, interval)
         elif source == "alphavantage":
             return self._from_alphavantage(symbol, start, end)
+        elif source == "yfinance":
+            return self._from_yfinance(symbol, start, end, interval)
         elif source == "csv":
             return self._from_csv(symbol, start, end)
         else:
             raise ValueError(
                 f"Unknown source '{source}'. "
-                f"Use: auto, yfinance, alphavantage, csv"
+                f"Use: auto, twelvedata, alphavantage, yfinance, csv"
             )
 
     # =========================================================================
-    # SOURCE 1: yfinance (default)
+    # SOURCE 1: Twelve Data (primary)
     # =========================================================================
 
-    def _from_yfinance(
-        self, symbol: str, start: str, end: str, interval: str
-    ) -> pd.DataFrame:
+    def _from_twelvedata(self, symbol, start, end, interval):
         """
-        Fetch from Yahoo Finance.
-        Free, no API key needed. Works for all major forex pairs.
+        Fetch from Twelve Data (primary source).
+        Free tier: 800 requests/day, 8 requests/minute.
+
+        Supports any valid 6-character forex pair automatically.
+        Known pairs use the symbol map; others are auto-converted
+        e.g. GBPJPY becomes GBP/JPY automatically.
+
+        Setup:
+            Add to .env: TWELVE_DATA_KEY=your_key_here
+            Get free key at: https://twelvedata.com
         """
-        try:
-            import yfinance as yf
-        except ImportError:
-            raise ImportError("Run: pip install yfinance")
+        import requests
 
-        ticker = self.YFINANCE_SYMBOL_MAP.get(symbol, symbol)
-        logger.info(f"yfinance: downloading {ticker}")
+        api_key = settings.TWELVE_DATA_KEY
+        if not api_key:
+            raise ValueError(
+                "TWELVE_DATA_KEY not found in .env. "
+                "Get a free key at: https://twelvedata.com"
+            )
 
-        df = yf.download(
-            ticker,
-            start=start,
-            end=end,
-            interval=interval,
-            progress=False,
-            auto_adjust=True,
-            group_by='ticker'
+        # Known pairs use the map; any other 6-char pair is auto-converted
+        if symbol in self.TWELVE_DATA_SYMBOL_MAP:
+            td_symbol = self.TWELVE_DATA_SYMBOL_MAP[symbol]
+        elif len(symbol) == 6:
+            td_symbol = f"{symbol[:3]}/{symbol[3:]}"
+        else:
+            raise ValueError(
+                f"Cannot convert '{symbol}' to Twelve Data format. "
+                f"Use standard 6-character forex pairs e.g. EURUSD, GBPJPY."
+            )
+
+        interval_map = {"1d": "1day", "1wk": "1week"}
+        td_interval = interval_map.get(interval, "1day")
+
+        url = (
+            f"https://api.twelvedata.com/time_series"
+            f"?symbol={td_symbol}"
+            f"&interval={td_interval}"
+            f"&start_date={start}"
+            f"&end_date={end}"
+            f"&outputsize=5000"
+            f"&order=ASC"
+            f"&apikey={api_key}"
         )
+
+        logger.info(f"Twelve Data: fetching {symbol} ({td_symbol})")
+        response = requests.get(url, timeout=self.REQUEST_TIMEOUT_SECONDS)
+        data = response.json()
+
+        if data.get("status") == "error":
+            raise ValueError(
+                f"Twelve Data error: {data.get('message', 'Unknown error')}"
+            )
+
+        if "values" not in data:
+            raise ValueError(
+                f"Twelve Data returned unexpected response for '{symbol}': "
+                f"{data.get('message', str(data))}"
+            )
+
+        values = data["values"]
+        if not values:
+            raise ValueError(
+                f"Twelve Data returned no data for '{symbol}' "
+                f"in range {start} to {end}."
+            )
+
+        records = []
+        for row in values:
+            records.append({
+                "date":   pd.to_datetime(row["datetime"]),
+                "open":   float(row["open"]),
+                "high":   float(row["high"]),
+                "low":    float(row["low"]),
+                "close":  float(row["close"]),
+                "volume": float(row.get("volume", 0)),
+            })
+
+        df = pd.DataFrame(records).set_index("date").sort_index()
 
         if df.empty:
             raise ValueError(
-                f"yfinance returned no data for '{symbol}' ({ticker}). "
-                f"Check the symbol and date range."
+                f"Twelve Data returned empty DataFrame for '{symbol}'."
             )
 
-        # yfinance returns MultiIndex columns: ('Close', 'EURUSD=X')
-        # Flatten to just the field name in lowercase: 'close'
-        if isinstance(df.columns, __import__('pandas').MultiIndex):
-            # yfinance column order differs by version:
-            # newer: (ticker, field) e.g. ('EURUSD=X', 'Close')
-            # older: (field, ticker) e.g. ('Close', 'EURUSD=X')
-            # Detect by checking if first element looks like a field name
-            fields = {'open','high','low','close','volume','adj close'}
-            sample = df.columns[0][0].lower()
-            if sample in fields:
-                df.columns = [col[0].lower() for col in df.columns]
-            else:
-                df.columns = [col[1].lower() for col in df.columns]
-        else:
-            df.columns = [c.lower() for c in df.columns]
-
-        # Ensure volume column exists (forex returns 0s)
-        if "volume" not in df.columns:
-            df["volume"] = 0.0
-
-        df = df[["open", "high", "low", "close", "volume"]].copy()
-        df.dropna(inplace=True)
-        return df
+        logger.info(f"Twelve Data: got {len(df)} rows for {symbol}")
+        return df[["open", "high", "low", "close", "volume"]]
 
     # =========================================================================
-    # SOURCE 2: Alpha Vantage (fallback)
+    # SOURCE 2: Alpha Vantage (first fallback)
     # =========================================================================
 
-    def _from_alphavantage(
-        self, symbol: str, start: str, end: str
-    ) -> pd.DataFrame:
+    def _from_alphavantage(self, symbol, start, end):
         """
-        Fetch from Alpha Vantage (free tier, daily data only).
+        Fetch from Alpha Vantage (first fallback).
+        Free tier: 25 requests/day, 5 requests/minute.
+        Limited to 9 hardcoded pairs in AV_SYMBOL_MAP.
 
         Setup:
-        1. Go to https://www.alphavantage.co/support/#api-key
-        2. Sign up for a free API key
-        3. Add to your .env file: ALPHA_VANTAGE_KEY=your_key_here
-
-        Note: Free tier is limited to 25 requests/day and 5/minute.
+            Add to .env: ALPHA_VANTAGE_KEY=your_key_here
+            Get free key at: https://www.alphavantage.co/support/#api-key
         """
-        try:
-            import requests
-        except ImportError:
-            raise ImportError("Run: pip install requests")
+        import requests
 
-        api_key = os.getenv("ALPHA_VANTAGE_KEY")
+        api_key = settings.ALPHA_VANTAGE_KEY
         if not api_key:
             raise ValueError(
                 "ALPHA_VANTAGE_KEY not found in .env. "
-                "Get a free key at: https://www.alphavantage.co/support/#api-key "
-                "Then add to .env: ALPHA_VANTAGE_KEY=your_key"
+                "Get a free key at: https://www.alphavantage.co/support/#api-key"
             )
 
         if symbol not in self.AV_SYMBOL_MAP:
@@ -229,7 +302,7 @@ class DataFetcher:
 
         from_currency, to_currency = self.AV_SYMBOL_MAP[symbol]
         url = (
-            "https://www.alphavantage.co/query"
+            f"https://www.alphavantage.co/query"
             f"?function=FX_DAILY"
             f"&from_symbol={from_currency}"
             f"&to_symbol={to_currency}"
@@ -238,7 +311,7 @@ class DataFetcher:
         )
 
         logger.info(f"Alpha Vantage: fetching {symbol} ({from_currency}/{to_currency})")
-        response = requests.get(url, timeout=30)
+        response = requests.get(url, timeout=self.REQUEST_TIMEOUT_SECONDS)
         data = response.json()
 
         if "Time Series FX (Daily)" not in data:
@@ -254,12 +327,10 @@ class DataFetcher:
                 "high":   float(values["2. high"]),
                 "low":    float(values["3. low"]),
                 "close":  float(values["4. close"]),
-                "volume": 0.0   # AV forex does not provide volume
+                "volume": 0.0,
             })
 
         df = pd.DataFrame(records).set_index("date").sort_index()
-
-        # Filter to requested date range
         df = df[
             (df.index >= pd.to_datetime(start)) &
             (df.index <= pd.to_datetime(end))
@@ -275,43 +346,80 @@ class DataFetcher:
         return df[["open", "high", "low", "close", "volume"]]
 
     # =========================================================================
-    # SOURCE 3: CSV (fully offline fallback)
+    # SOURCE 3: yfinance (second fallback)
     # =========================================================================
 
-    def _from_csv(
-        self, symbol: str, start: str, end: str
-    ) -> pd.DataFrame:
+    def _from_yfinance(self, symbol, start, end, interval):
         """
-        Load data from a local CSV file. Fully offline — no internet needed.
+        Fetch from Yahoo Finance (second fallback).
+        Free, no API key needed. Unreliable for forex.
+        Limited to 9 hardcoded pairs in YFINANCE_SYMBOL_MAP.
+        """
+        try:
+            import yfinance as yf
+        except ImportError:
+            raise ImportError("Run: pip install yfinance")
+
+        ticker = self._to_yfinance_ticker(symbol)
+        logger.info(f"yfinance: downloading {ticker}")
+
+        df = yf.download(
+            ticker,
+            start=start,
+            end=end,
+            interval=interval,
+            progress=False,
+            auto_adjust=True,
+            group_by="ticker"
+        )
+
+        if df.empty:
+            raise ValueError(
+                f"yfinance returned no data for '{symbol}' ({ticker}). "
+                f"Check the symbol and date range."
+            )
+
+        if isinstance(df.columns, pd.MultiIndex):
+            fields = {"open", "high", "low", "close", "volume", "adj close"}
+            sample = df.columns[0][0].lower()
+            if sample in fields:
+                df.columns = [col[0].lower() for col in df.columns]
+            else:
+                df.columns = [col[1].lower() for col in df.columns]
+        else:
+            df.columns = [c.lower() for c in df.columns]
+
+        if "volume" not in df.columns:
+            df["volume"] = 0.0
+
+        df = df[["open", "high", "low", "close", "volume"]].copy()
+        df.dropna(inplace=True)
+        return df
+
+    # =========================================================================
+    # SOURCE 4: CSV (fully offline fallback)
+    # =========================================================================
+
+    def _from_csv(self, symbol, start, end):
+        """
+        Load data from a local CSV file. Fully offline.
 
         Setup:
-        1. Create a folder called 'data' in your project root
-        2. Place your CSV file there named exactly: EURUSD.csv, GBPUSD.csv etc.
-
-        Required CSV columns:
-            date, open, high, low, close
-        Optional:
-            volume (will default to 0 if missing)
-
-        CSV example:
-            date,open,high,low,close,volume
-            2020-01-02,1.12010,1.12150,1.11980,1.12100,0
-            2020-01-03,1.12100,1.12300,1.11900,1.12050,0
+            Place file at data/{SYMBOL}.csv e.g. data/EURUSD.csv
+            Required columns: date, open, high, low, close
+            Optional: volume (defaults to 0 if missing)
 
         Where to get free historical forex CSVs:
-        - https://www.histdata.com/download-free-forex-historical-data/
-        - https://forexsb.com/historical-forex-data
+            https://www.histdata.com/download-free-forex-historical-data/
         """
-        csv_path = os.path.join("data", f"{symbol}.csv")
+        from pathlib import Path
 
-        if not os.path.exists(csv_path):
+        csv_path = Path("data") / f"{symbol}.csv"
+
+        if not csv_path.exists():
             raise FileNotFoundError(
                 f"CSV file not found at '{csv_path}'.\n"
-                f"To use offline mode:\n"
-                f"  1. Create a 'data/' folder in your project\n"
-                f"  2. Download {symbol} CSV from histdata.com\n"
-                f"  3. Name it exactly: data/{symbol}.csv\n"
-                f"  4. Ensure columns: date, open, high, low, close"
+                f"Download from histdata.com and name it data/{symbol}.csv"
             )
 
         logger.info(f"CSV: loading {csv_path}")
@@ -322,7 +430,6 @@ class DataFetcher:
         df.index.name = "date"
         df.columns = [c.lower() for c in df.columns]
 
-        # Filter by date range
         df = df[
             (df.index >= pd.to_datetime(start)) &
             (df.index <= pd.to_datetime(end))
@@ -333,7 +440,6 @@ class DataFetcher:
                 f"CSV '{csv_path}' has no data between {start} and {end}."
             )
 
-        # Validate required columns
         for col in ["open", "high", "low", "close"]:
             if col not in df.columns:
                 raise ValueError(
@@ -350,9 +456,8 @@ class DataFetcher:
     # NORMALIZER
     # =========================================================================
 
-    def _normalize(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _normalize(self, df):
         """Normalize column names to lowercase and keep only OHLCV."""
-        # Handle multi-level columns from yfinance
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = [col[0].lower() for col in df.columns]
         else:
@@ -361,3 +466,14 @@ class DataFetcher:
         df = df[["open", "high", "low", "close", "volume"]].copy()
         df.dropna(inplace=True)
         return df
+
+    def _to_yfinance_ticker(self, symbol: str) -> str:
+        """Convert standard forex symbols like GBPJPY to Yahoo's GBPJPY=X form."""
+        if symbol in self.YFINANCE_SYMBOL_MAP:
+            return self.YFINANCE_SYMBOL_MAP[symbol]
+
+        compact_symbol = symbol.replace("/", "").upper()
+        if len(compact_symbol) == 6 and compact_symbol.isalpha():
+            return f"{compact_symbol}=X"
+
+        return symbol

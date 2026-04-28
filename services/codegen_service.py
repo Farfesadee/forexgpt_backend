@@ -488,14 +488,28 @@ DB calls use public.generated_codes and public.codegen_conversations.
 
 import uuid
 import asyncio
+import re
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 from prompts.codegen_prompt import CODEGEN_SYSTEM_PROMPT
 import logging
 
 from core.database import get_db
+from services.ai_errors import (
+    AIServiceUnavailableError,
+    is_capacity_exceeded_error,
+    is_temporary_ai_unavailable_error,
+)
 
 logger = logging.getLogger(__name__)
+
+_PROMPT_ECHO_MARKERS = (
+    "ORIGINAL CODE:",
+    "BACKTEST RESULTS:",
+    "EXPERT ANALYSIS:",
+    "ADDITIONAL REQUIREMENTS:",
+    "Please improve this strategy.",
+)
 
 
 def _normalize_timestamp(value) -> str:
@@ -531,9 +545,19 @@ class CodeGenService:
         3. Modification        -- previous_code, no error_message
     """
 
-    def __init__(self, mistral_client, model_id: str = "mistral-small-latest"):
+    def __init__(
+        self,
+        mistral_client,
+        model_id: str = "codestral-latest",
+        fallback_model_ids: Optional[List[str]] = None,
+    ):
         self.client        = mistral_client
         self.model_id      = model_id
+        self.fallback_model_ids = [
+            fallback_model_id.strip()
+            for fallback_model_id in (fallback_model_ids or [])
+            if fallback_model_id and fallback_model_id.strip() and fallback_model_id.strip() != model_id
+        ]
         self.system_prompt = CODEGEN_SYSTEM_PROMPT
 
     # =========================================================================
@@ -547,6 +571,9 @@ class CodeGenService:
         conversation_id: Optional[str] = None,
         previous_code: Optional[str] = None,
         error_message: Optional[str] = None,
+        llm_user_message: Optional[str] = None,
+        stored_user_message: Optional[str] = None,
+        stored_description: Optional[str] = None,
     ) -> Dict:
         """
         Generate, debug, or modify trading strategy code.
@@ -567,21 +594,23 @@ class CodeGenService:
                 conversation_id = str(uuid.uuid4())
                 history = []
 
-            user_message = self._build_user_message(
+            llm_message = llm_user_message or self._build_user_message(
                 strategy_description, previous_code, error_message
             )
+            persisted_user_message = stored_user_message or llm_message
+            persisted_description = stored_description or strategy_description
 
             messages = [
                 {"role": "system", "content": self.system_prompt},
                 *history,
-                {"role": "user", "content": user_message},
+                {"role": "user", "content": llm_message},
             ]
 
             response = await self._generate_response(messages)
             code, explanation = self._parse_response(response)
 
             # Persist conversation turns
-            self._save_message(conversation_id, user_id, "user", user_message)
+            self._save_message(conversation_id, user_id, "user", persisted_user_message)
             self._save_message(conversation_id, user_id, "assistant", response)
 
             # Save generated code to generated_codes table
@@ -592,7 +621,7 @@ class CodeGenService:
                     "user_id":         user_id,
                     "conversation_id": conversation_id,
                     "code":            code,
-                    "description":     strategy_description,
+                    "description":     persisted_description,
                     "created_at":      datetime.utcnow().isoformat(),
                 })
                 .execute()
@@ -613,37 +642,58 @@ class CodeGenService:
             logger.error(f"Error in generate_code: {e}", exc_info=True)
             raise
 
-    async def list_generated_codes(self, user_id: str, limit: int = 20) -> List[Dict]:
+    async def list_generated_codes(self, user_id: str, limit: int = 100) -> List[Dict]:
         """List all generated strategy codes for a user (most recent first)."""
-        return await self.list_user_conversations(user_id, limit)
-
-    async def list_user_conversations(self, user_id: str, limit: int = 20) -> List[Dict]:
-        """
-        List unique logic sessions for a user (most recent first).
-        Groups by conversation_id.
-        """
         try:
-            # First, get the unique conversation IDs and their latest message
             result = (
-                get_db().table("codegen_conversations")
-                .select("conversation_id, content, created_at")
+                get_db().table("generated_codes")
+                .select("id, conversation_id, description, created_at")
                 .eq("user_id", user_id)
                 .order("created_at", desc=True)
+                .limit(limit)
                 .execute()
             )
             rows = result.data or []
             return [
                 {
-                    "id":          r["id"],
+                    "id":              r["id"],
                     "conversation_id": r.get("conversation_id"),
-                    "description": (r.get("description") or "")[:100],
-                    "created_at":  _normalize_timestamp(r.get("created_at")),
+                    "description":     (r.get("description") or "")[:100],
+                    "created_at":      _normalize_timestamp(r.get("created_at")),
                 }
                 for r in rows
             ]
         except Exception as e:
-            logger.error(f"Error listing logic sessions: {e}", exc_info=True)
+            logger.error(f"Error listing generated codes: {e}", exc_info=True)
             raise
+
+    # async def list_user_conversations(self, user_id: str, limit: int = 20) -> List[Dict]:
+    #     """
+    #     List unique logic sessions for a user (most recent first).
+    #     Groups by conversation_id.
+    #     """
+    #     try:
+    #         # First, get the unique conversation IDs and their latest message
+    #         result = (
+    #             get_db().table("codegen_conversations")
+    #             .select("conversation_id, content, created_at")
+    #             .eq("user_id", user_id)
+    #             .order("created_at", desc=True)
+    #             .execute()
+    #         )
+    #         rows = result.data or []
+    #         return [
+    #             {
+    #                 "id":          r["id"],
+    #                 "conversation_id": r.get("conversation_id"),
+    #                 "description": (r.get("description") or "")[:100],
+    #                 "created_at":  _normalize_timestamp(r.get("created_at")),
+    #             }
+    #             for r in rows
+    #         ]
+    #     except Exception as e:
+    #         logger.error(f"Error listing logic sessions: {e}", exc_info=True)
+    #         raise
 
     async def get_generated_code(self, code_id: str, user_id: str) -> Optional[Dict]:
         """Return a specific strategy by ID. None if not found or unauthorized."""
@@ -678,79 +728,97 @@ class CodeGenService:
             history = self._load_history(conversation_id, user_id)
             if history is None:
                 return None
-            
-            # Fetch codes for this conversation to attach to assistant messages
-            codes_res = (
-                get_db().table("generated_codes")
-                .select("code, created_at")
-                .eq("conversation_id", conversation_id)
-                .order("created_at")
-                .execute()
-            )
-            codes = codes_res.data or []
-            
+
             result = []
-            code_idx = 0
             for m in history:
+                extracted_code = None
+                if m["role"] == "assistant":
+                    extracted_code, _ = self._parse_response(m["content"])
+                    if not extracted_code or extracted_code == m["content"].strip():
+                        extracted_code = None
+
                 msg = {
                     "role":      m["role"],
                     "content":   m["content"],
                     "timestamp": _normalize_timestamp(m.get("timestamp")),
+                    "code":      extracted_code,
                 }
-                if m["role"] == "assistant" and code_idx < len(codes):
-                    msg["code"] = codes[code_idx]["code"]
-                    code_idx += 1
                 result.append(msg)
-            
+
             return result
         except Exception as e:
             logger.error(f"Error retrieving conversation history: {e}", exc_info=True)
             raise
 
-    async def delete_conversation(self, conversation_id: str, user_id: str) -> bool:
-        """Delete a logic session and all associated history."""
+    def delete_conversation(self, conversation_id: str, user_id: str) -> bool:
+        """
+        Delete all messages in a conversation.
+        Returns False if conversation not found or unauthorized.
+        """
         try:
-            # 1. Verify ownership (check messages)
-            result = (
-                get_db().table("codegen_conversations")
-                .select("id")
-                .eq("conversation_id", conversation_id)
-                .eq("user_id", user_id)
-                .limit(1)
+            # Check conversation exists and belongs to user
+            history = self._load_history(conversation_id, user_id)
+            if history is None:
+                return False  # Unauthorized
+            if len(history) == 0:
+                return False  # Not found
+
+            # Delete all messages in the conversation
+            get_db().table("codegen_conversations") \
+                .delete() \
+                .eq("conversation_id", conversation_id) \
+                .eq("user_id", user_id) \
                 .execute()
-            )
-            
-            if not result.data:
-                logger.warning(f"Conversation {conversation_id} not found or unauthorized for delete")
-                return False
-                
-            # 2. Delete the conversation history
-            get_db().table("codegen_conversations").delete().eq("conversation_id", conversation_id).eq("user_id", user_id).execute()
-            
-            # 3. Delete associated generated codes
-            get_db().table("generated_codes").delete().eq("conversation_id", conversation_id).eq("user_id", user_id).execute()
-            
-            logger.info(f"Successfully deleted conversation {conversation_id}")
+
+            logger.info(f"Deleted conversation {conversation_id}")
             return True
+
         except Exception as e:
-            logger.error(f"Error deleting logic session: {e}", exc_info=True)
+            logger.error(f"Error deleting conversation: {e}", exc_info=True)
             raise
 
-    async def delete_generated_code(self, code_id: str, user_id: str) -> bool:
-        """Compatibility method - Deletes by code_id but actually clears the whole conversation."""
-        try:
-            result = (
-                get_db().table("generated_codes")
-                .select("conversation_id")
-                .eq("id", code_id)
-                .eq("user_id", user_id)
-                .execute()
-            )
-            if not result.data: return False
-            return await self.delete_conversation(result.data[0]["conversation_id"], user_id)
-        except Exception as e:
-            logger.error(f"Error in delete_generated_code proxy: {e}", exc_info=True)
-            raise
+    async def generate_improvement(
+        self,
+        user_id: str,
+        original_code: str,
+        backtest_results: Dict[str, Any],
+        mentor_analysis: str,
+        additional_requirements: Optional[str] = None,
+        conversation_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Generate improved strategy based on backtest results and mentor feedback.
+        
+        This is essentially a wrapper around generate_code() that builds a specific
+        user message for improvement mode. All the actual work (calling Mistral,
+        saving to DB, parsing response) is handled by generate_code().
+        """
+        
+        # Build improvement mode user message
+        improvement_message = self._build_improvement_message(
+            original_code=original_code,
+            backtest_results=backtest_results,
+            mentor_analysis=mentor_analysis,
+            additional_requirements=additional_requirements
+        )
+        stored_summary = self._build_improvement_summary(
+            backtest_results=backtest_results,
+            additional_requirements=additional_requirements,
+        )
+
+        # Keep the full prompt for the LLM, but persist a concise user-facing summary
+        # so the frontend does not prefill the entire mentor response later.
+        result = await self.generate_code(
+            user_id=user_id,
+            strategy_description=stored_summary,
+            conversation_id=conversation_id,
+            llm_user_message=improvement_message,
+            stored_user_message=stored_summary,
+            stored_description=stored_summary,
+        )
+
+        return result
+
 
     # =========================================================================
     # PRIVATE HELPERS
@@ -844,9 +912,65 @@ class CodeGenService:
                 f"- Make it backtesting-ready\n"
                 f"- Include docstrings and comments"
             )
+        
+    def _normalize_code(self, code: str) -> str:
+        """
+        Auto-fix common indentation errors from LLM-generated code.
+        Specifically targets lines that dropped to column 0 inside a function body.
+        """
+        import ast
+
+        # First try — if code is already valid, return as-is
+        try:
+            ast.parse(code)
+            return code
+        except SyntaxError:
+            pass
+
+        lines = code.split("\n")
+        fixed = []
+        indent_stack = [0]  # track expected indentation levels
+        inside_function = False
+        expected_indent = 0
+
+        for i, line in enumerate(lines):
+            stripped = line.lstrip()
+
+            # Blank lines pass through
+            if not stripped:
+                fixed.append(line)
+                continue
+
+            current_indent = len(line) - len(stripped)
+
+            # Detect function/class definition — sets context
+            if stripped.startswith(("def ", "class ")):
+                inside_function = True
+                expected_indent = current_indent + 4
+                indent_stack = [current_indent]
+                fixed.append(line)
+                continue
+
+            # If inside a function and line dropped to column 0 unexpectedly
+            if inside_function and current_indent == 0 and not stripped.startswith(("def ", "class ", "#", "@")):
+                # Re-indent to expected level
+                fixed.append(" " * expected_indent + stripped)
+            else:
+                fixed.append(line)
+
+        fixed_code = "\n".join(fixed)
+
+        # Validate — if still broken, return original and let it fail naturally
+        try:
+            ast.parse(fixed_code)
+            return fixed_code
+        except SyntaxError:
+            return code
 
     def _parse_response(self, response: str) -> Tuple[str, str]:
         """Split model response into (code, explanation)."""
+        response = self._clean_response_text(response)
+
         if "```python" in response:
             start = response.find("```python") + len("```python")
             end   = response.find("```", start)
@@ -860,26 +984,155 @@ class CodeGenService:
         else:
             code        = response.strip()
             explanation = "Generated trading strategy code."
+
+        code = self._normalize_code(code)
         return code, explanation
 
     async def _generate_response(self, messages: List[Dict]) -> str:
-        """Call Mistral with up to 3 retries. temperature=0.3 for deterministic code."""
+        """Call Mistral with retries and optional model fallback."""
         last_error = None
-        for attempt in range(3):
-            try:
-                response = await self.client.chat.complete_async(
-                    model=self.model_id,
-                    messages=messages,
-                    max_tokens=2500,
-                    temperature=0.3,
-                    top_p=0.9,
-                )
-                return response.choices[0].message.content
-            except Exception as e:
-                last_error = e
-                logger.warning(f"_generate_response attempt {attempt + 1} failed: {e}")
-                if attempt < 2:
-                    await asyncio.sleep(2)
+        model_ids = [self.model_id, *self.fallback_model_ids]
+
+        for model_index, model_id in enumerate(model_ids):
+            for attempt in range(2):
+                try:
+                    response = await self.client.chat.complete_async(
+                        model=model_id,
+                        messages=messages,
+                        max_tokens=2500,
+                        temperature=0.3,
+                        top_p=0.9,
+                    )
+                    cleaned_text = self._clean_response_text(
+                        response.choices[0].message.content
+                    )
+                    if not cleaned_text:
+                        raise ValueError("Code generation returned an empty response.")
+                    if model_id != self.model_id:
+                        logger.info("Codegen request succeeded with fallback model %s", model_id)
+                    return cleaned_text
+                except Exception as e:
+                    last_error = e
+                    is_capacity_error = is_capacity_exceeded_error(e)
+                    logger.warning(
+                        "_generate_response attempt %s failed for model %s: %s",
+                        attempt + 1,
+                        model_id,
+                        e,
+                    )
+
+                    if is_capacity_error and model_index < len(model_ids) - 1:
+                        logger.info(
+                            "Primary codegen model %s is at capacity; trying fallback model %s",
+                            model_id,
+                            model_ids[model_index + 1],
+                        )
+                        break
+
+                    if attempt < 1:
+                        await asyncio.sleep(1 + attempt)
 
         logger.error(f"All retries exhausted: {last_error}", exc_info=True)
+        if last_error and is_temporary_ai_unavailable_error(last_error):
+            raise AIServiceUnavailableError(
+                "The code generation model is temporarily at capacity. Please try again in a moment."
+            )
         raise last_error
+    
+    def _build_improvement_message(
+        self,
+        original_code: str,
+        backtest_results: Dict[str, Any],
+        mentor_analysis: str,
+        additional_requirements: Optional[str] = None
+    ) -> str:
+        """
+        Build the user message for improvement mode.
+        
+        This message triggers the IMPROVEMENT MODE section in the system prompt.
+        """
+        
+        message = f"""I backtested this strategy and it underperformed:
+
+ORIGINAL CODE:
+```python
+{original_code}
+```
+
+BACKTEST RESULTS:
+- Strategy: {backtest_results.get('strategy_name', 'N/A')}
+- Currency Pair: {backtest_results.get('pair', 'N/A')}
+- Period: {backtest_results.get('start_date', 'N/A')} to {backtest_results.get('end_date', 'N/A')}
+- Total Return: {backtest_results.get('total_return_pct', 'N/A')}%
+- Sharpe Ratio: {backtest_results.get('sharpe_ratio', 'N/A')}
+- Sortino Ratio: {backtest_results.get('sortino_ratio', 'N/A')}
+- Max Drawdown: {backtest_results.get('max_drawdown_pct', 'N/A')}%
+- Win Rate: {backtest_results.get('win_rate_pct', 'N/A')}%
+- Total Trades: {backtest_results.get('total_trades', 'N/A')}
+- Profit Factor: {backtest_results.get('profit_factor', 'N/A')}
+- Average Risk/Reward: {backtest_results.get('avg_risk_reward', 'N/A')}
+- CAGR: {backtest_results.get('cagr_pct', 'N/A')}%
+- Annual Volatility: {backtest_results.get('volatility_annual_pct', 'N/A')}%
+
+EXPERT ANALYSIS:
+{mentor_analysis}
+Please improve this strategy. Focus on:
+1. Adding filters to avoid unfavorable market conditions
+2. Improving risk management (stop losses, position sizing)
+3. Optimizing entry/exit logic
+"""
+        if additional_requirements:
+            message += f"\nADDITIONAL REQUIREMENTS:\n{additional_requirements}\n"
+    
+        message += """
+Provide:
+1. The improved code (complete, runnable)
+2. Explanation of what changed and why
+3. Expected improvements in metrics"""
+    
+        return message
+
+    def _build_improvement_summary(
+        self,
+        backtest_results: Dict[str, Any],
+        additional_requirements: Optional[str] = None,
+    ) -> str:
+        strategy_name = backtest_results.get("strategy_name") or "strategy"
+        pair = backtest_results.get("pair") or "selected pair"
+        total_return = backtest_results.get("total_return_pct")
+        summary = (
+            f"Improve my {strategy_name} strategy for {pair} "
+            f"based on the latest backtest and mentor feedback"
+        )
+        if total_return is not None:
+            summary += f" (return: {total_return}%)"
+        if additional_requirements:
+            summary += f". Extra requirements: {additional_requirements}"
+        return summary
+
+    def _clean_response_text(self, response: Optional[str]) -> str:
+        text = (response or "").strip()
+        if not text:
+            return ""
+
+        text = self._collapse_duplicate_paragraphs(text)
+
+        first_code_block = text.find("```")
+        if first_code_block > 0:
+            prefix = text[:first_code_block]
+            if any(marker in prefix for marker in _PROMPT_ECHO_MARKERS):
+                text = text[first_code_block:].lstrip()
+
+        return text.strip()
+
+    @staticmethod
+    def _collapse_duplicate_paragraphs(text: str) -> str:
+        parts = [part.strip() for part in re.split(r"\n\s*\n", text) if part.strip()]
+        if not parts:
+            return text.strip()
+
+        deduped_parts: List[str] = []
+        for part in parts:
+            if not deduped_parts or part != deduped_parts[-1]:
+                deduped_parts.append(part)
+        return "\n\n".join(deduped_parts)

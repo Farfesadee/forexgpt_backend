@@ -37,9 +37,9 @@ from core.dependencies import get_signal_service
 from api.middleware.auth_middleware import get_current_user
 from models.user import JWTPayload
 from typing import Optional
+from services.ai_errors import AIServiceUnavailableError
 
 router = APIRouter(prefix="/signals", tags=["signals"])
-service = get_signal_service()
 
 def _assert_user_access(requested_user_id: str, user: JWTPayload) -> None:
     if requested_user_id != user.user_id:
@@ -53,6 +53,7 @@ def _assert_user_access(requested_user_id: str, user: JWTPayload) -> None:
 async def extract_signal(
     request: ExtractSignalRequest,
     user: JWTPayload = Depends(get_current_user),
+    service = Depends(get_signal_service),
 ):
     try:
         if request.user_id and request.user_id != user.user_id:
@@ -67,6 +68,8 @@ async def extract_signal(
             save_to_db=request.save_to_db
         )
         return result
+    except AIServiceUnavailableError:
+        raise
     except HTTPException:
         raise
     except Exception as e:
@@ -81,6 +84,7 @@ async def extract_signal(
 async def batch_extract(
     request: BatchExtractRequest,
     user: JWTPayload = Depends(get_current_user),
+    service = Depends(get_signal_service),
 ):
     try:
         if request.user_id and request.user_id != user.user_id:
@@ -98,6 +102,8 @@ async def batch_extract(
             "total": len(signals),
             "signals_found": sum(1 for s in signals if s.get("signal"))
         }
+    except AIServiceUnavailableError:
+        raise
     except HTTPException:
         raise
     except Exception as e:
@@ -111,6 +117,7 @@ async def get_user_signals(
     currency_pair: Optional[str] = None,
     direction: Optional[str] = None,
     user: JWTPayload = Depends(get_current_user),
+    service = Depends(get_signal_service),
 ):
     try:
         _assert_user_access(user_id, user)
@@ -132,6 +139,7 @@ async def get_signal(
     signal_id: str,
     user_id: str,
     user: JWTPayload = Depends(get_current_user),
+    service = Depends(get_signal_service),
 ):
     try:
         _assert_user_access(user_id, user)
@@ -149,6 +157,7 @@ async def get_signal(
 async def get_statistics(
     user_id: str,
     user: JWTPayload = Depends(get_current_user),
+    service = Depends(get_signal_service),
 ):
     try:
         _assert_user_access(user_id, user)
@@ -160,19 +169,19 @@ async def get_statistics(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/save")
-async def save_signal(
-    signal_data: dict,
-    user: JWTPayload = Depends(get_current_user),
-):
-    try:
-        result = await service.save_signal_result(
-            user_id=user.user_id,
-            signal_data=signal_data
-        )
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+# @router.post("/save")
+# async def save_signal(
+#     signal_data: dict,
+#     user: JWTPayload = Depends(get_current_user),
+# ):
+#     try:
+#         result = await service.save_signal_result(
+#             user_id=user.user_id,
+#             signal_data=signal_data
+#         )
+#         return result
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/{user_id}/{signal_id}", response_model=DeleteSignalResponse)
@@ -180,6 +189,7 @@ async def delete_signal(
     signal_id: str,
     user_id: str,
     user: JWTPayload = Depends(get_current_user),
+    service = Depends(get_signal_service),
 ):
     try:
         _assert_user_access(user_id, user)

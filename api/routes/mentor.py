@@ -377,6 +377,7 @@ from models.mentor import (
 from models.user import JWTPayload
 from api.middleware.auth_middleware import get_current_user
 from core.dependencies import get_mentor_service
+from services.ai_errors import AIServiceUnavailableError
 
 router = APIRouter(prefix="/mentor", tags=["mentor"])
 service = get_mentor_service()
@@ -406,6 +407,8 @@ async def ask_question(
             conversation_id=request.conversation_id
         )
         return result
+    except AIServiceUnavailableError:
+        raise
     except HTTPException:
         raise
     except Exception as e:
@@ -416,16 +419,50 @@ async def ask_question(
         # )
 
 
-@router.get("/conversations/{user_id}", response_model=list[ConversationSummaryResponse])
+@router.get("/conversations", response_model=list[ConversationSummaryResponse])
+async def list_conversations_for_current_user(
+    limit: int = 100,
+    user: JWTPayload = Depends(get_current_user),
+):
+    try:
+        conversations = service.list_user_conversations(user.user_id, limit)
+        return conversations
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/conversations/user/{user_id}", response_model=list[ConversationSummaryResponse])
 async def list_conversations(
     user_id: str,
-    limit: int = 20,
+    limit: int = 100,
     user: JWTPayload = Depends(get_current_user),
 ):
     try:
         _assert_user_access(user_id, user)
         conversations = service.list_user_conversations(user_id, limit)
         return conversations
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/conversations/{conversation_id}", response_model=ConversationHistoryResponse)
+async def get_conversation_for_current_user(
+    conversation_id: str,
+    user: JWTPayload = Depends(get_current_user),
+):
+    try:
+        history = service.get_conversation_history(conversation_id, user.user_id)
+        if history is None:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        return {
+            "conversation_id": conversation_id,
+            "history": history,
+            "message_count": len(history),
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -448,6 +485,22 @@ async def get_conversation(
             "history": history,
             "message_count": len(history)
         }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/conversations/{conversation_id}", response_model=DeleteConversationResponse)
+async def delete_conversation_for_current_user(
+    conversation_id: str,
+    user: JWTPayload = Depends(get_current_user),
+):
+    try:
+        deleted = service.delete_conversation(conversation_id, user.user_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        return {"message": "Conversation deleted successfully", "conversation_id": conversation_id}
     except HTTPException:
         raise
     except Exception as e:

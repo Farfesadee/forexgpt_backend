@@ -47,6 +47,10 @@ class ProfilesRepo:
     def get(self, user_id: str) -> dict:
         return self._t.select("*").eq("id", user_id).single().execute().data
 
+    def get_by_email(self, email: str) -> Optional[dict]:
+        rows = self._t.select("*").eq("email", email).limit(1).execute().data
+        return rows[0] if rows else None
+
     def create(self, data: dict) -> dict:
         return self._t.insert(data).execute().data[0]
 
@@ -78,19 +82,25 @@ class MentorRepo:
     def _msg(self):  return get_db().table("mentor_messages")
 
     # Conversations
-    def list_conversations(self, user_id: str, include_archived: bool = False, limit: int = 30) -> List[dict]:
-        q = get_db().table("mentor_history").select("*").eq("user_id", user_id)
+    def list_conversations(self, user_id: str, include_archived: bool = False, limit: int = 100) -> List[dict]:
+        q = (
+            get_db().table("mentor_history")
+            .select(
+                "id, user_id, title, message_count, is_archived, last_message_at, "
+                "created_at, last_response_preview, last_model_used"
+            )
+            .eq("user_id", user_id)
+        )
         if not include_archived:
             q = q.eq("is_archived", False)
-        return q.limit(limit).execute().data
+        return q.order("last_message_at", desc=True).limit(limit).execute().data
 
     # In your database service
-    def create_conversation(self, id, user_id, title):
-        return self._conv.insert({
-            "id": id, 
-            "user_id": user_id, 
-            "title": title
-        }).execute() # .execute() returns the data created in the DB`
+    def create_conversation(self, id, user_id, title, signal_id=None):
+        payload = {"id": id, "user_id": user_id, "title": title}
+        if signal_id:
+            payload["signal_id"] = signal_id
+        return self._conv.insert(payload).execute() # .execute() returns the data created in the DB`
 
     def archive_conversation(self, conversation_id: str) -> None:
         self._conv.update({"is_archived": True}).eq("id", conversation_id).execute()
@@ -154,16 +164,22 @@ class SignalsRepo:
             base = base.eq("direction", direction.lower())
 
         if pair:
+            # try:
+            #     q = base.eq("currency_pair", pair)
+            #     res = q.order("created_at", desc=True).range(offset, offset + limit - 1).execute()
+            # except APIError as e:
+            #     err = str(e).lower()
+            #     if "operator does not exist" in err or "array" in err or "malformed" in err:
+            #         q = base.contains("currency_pair", [pair])
+            #         res = q.order("created_at", desc=True).range(offset, offset + limit - 1).execute()
+            #     else:
+            #         raise
             try:
-                q = base.eq("currency_pair", pair)
+                q = base.contains("currency_pair", [pair])
                 res = q.order("created_at", desc=True).range(offset, offset + limit - 1).execute()
             except APIError as e:
-                err = str(e).lower()
-                if "operator does not exist" in err or "array" in err:
-                    q = base.contains("currency_pair", [pair])
-                    res = q.order("created_at", desc=True).range(offset, offset + limit - 1).execute()
-                else:
-                    raise
+                logger.error(f"Error filtering by pair: {e}")
+                raise
         else:
             res = base.order("created_at", desc=True).range(offset, offset + limit - 1).execute()
         
@@ -260,10 +276,10 @@ class BacktestsRepo:
                 for i, t in enumerate(trades)]
         self._tr.insert(rows).execute()
 
-    def list(self, user_id: str, pair: Optional[str] = None, limit: int = 20) -> List[dict]:
+    def list(self, user_id: str, pair: Optional[str] = None, limit: int = 100) -> List[dict]:
         q = (
             self._bt.select(
-                "id, strategy_id, pair, start_date, end_date, timeframe, "
+                "id, strategy_id, strategy_name, pair, start_date, end_date, timeframe, "
                 "initial_capital, status, total_return_pct, sharpe_ratio, "
                 "max_drawdown_pct, win_rate_pct, total_trades, is_saved, created_at"
             ).eq("user_id", user_id).eq("status", "completed")
@@ -347,6 +363,16 @@ class ActivityRepo:
             "p_entity_id":   entity_id,
             "p_metadata":    metadata or {},
         }).execute()
+
+    def list(self, user_id: str, limit: int = 20) -> List[dict]:
+        return (
+            get_db().table("activity_log")
+            .select("id, user_id, action, entity_type, entity_id, metadata, created_at")
+            .eq("user_id", user_id)
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute().data
+        )
 
 # Single Database Access Object 
 class Database:

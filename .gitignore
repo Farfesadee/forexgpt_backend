@@ -11,6 +11,7 @@ env/
 venv/
 .venv/
 ENV/
+_env
 
 all_columns.txt
 check_db_schema.py
@@ -21,3 +22,5 @@ list_columns.py
 schema_results.txt
 test_output.txt
 test_registration.py
+
+.env

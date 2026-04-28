@@ -35,6 +35,10 @@ from backtesting.metrics.performance_metrics import PerformanceMetrics
 logger = logging.getLogger(__name__)
 
 
+class BacktestExecutionTimeoutError(RuntimeError):
+    """Raised when sandboxed custom strategy execution exceeds the time limit."""
+
+
 # ============================================================================
 # STRATEGY BUILDER
 # Returns a callable compatible with BacktestEngine.run_backtest()
@@ -61,67 +65,150 @@ def _make_serializable(obj):
         return [_make_serializable(i) for i in obj.tolist()]
     return obj
 
+
+def _first_param(params: Dict[str, Any], *names: str, default: Any = None) -> Any:
+    """Return the first non-empty parameter value from a list of aliases."""
+    for name in names:
+        if name in params and params[name] is not None:
+            return params[name]
+    return default
+
+
+# ============================================================================
+# STRATEGY BUILDER
+# Returns a callable compatible with BacktestEngine.run_backtest()
+#
+# CHANGE FROM PREVIOUS VERSION:
+#   Every strategy fn() now returns a TUPLE (signal, reason) instead of a
+#   plain string. The reason is a human-readable explanation of why the
+#   signal fired — e.g. "RSI = 28.4 < 30 (oversold)".
+#   BacktestEngine.run_backtest() handles both tuple and plain-string returns
+#   transparently for backwards compatibility.
+# ============================================================================
+
+
 def _build_strategy(strategy: str, params: Dict[str, Any]):
     """Build a strategy function from name + params."""
     strategy = strategy.lower().replace(" ", "_")
 
+    # Accept the common shorthand used by the frontend/test prompts.
+    if strategy in {"sma", "sma_cross", "sma_crossover"}:
+        strategy = "moving_average_crossover"
+    if strategy == "bollinger":
+        strategy = "bollinger_bands"
+
+    # -------------------------------------------------------------------------
+    # RSI — Relative Strength Index
+    # -------------------------------------------------------------------------
+
     if strategy == "rsi":
-        period     = params.get("period", 14)
-        oversold   = params.get("oversold", 30)
-        overbought = params.get("overbought", 70)
+        period = int(_first_param(params, "period", "rsi_period", default=14))
+        oversold = float(_first_param(
+            params,
+            "oversold",
+            "lower_threshold",
+            "buy_threshold",
+            default=30,
+        ))
+        overbought = float(_first_param(
+            params,
+            "overbought",
+            "upper_threshold",
+            "sell_threshold",
+            default=70,
+        ))
 
         def fn(data):
             if len(data) < period + 1:
-                return None
+                return None, None
             close = data["close"]
             delta = close.diff()
             gain  = delta.where(delta > 0, 0.0).rolling(period).mean()
             loss  = (-delta.where(delta < 0, 0.0)).rolling(period).mean()
             rsi   = 100 - (100 / (1 + gain / loss))
+            current_rsi = round(float(rsi.iloc[-1]), 2)
+            
             if rsi.iloc[-1] < oversold  and rsi.iloc[-2] >= oversold:
-                return "buy"
+                return "buy", f"BUY - RSI = {current_rsi} dropped below {oversold} (oversold signal)"
             if rsi.iloc[-1] > overbought and rsi.iloc[-2] <= overbought:
-                return "sell"
-            return None
+                return "sell", f"SELL - RSI = {current_rsi} rose above {overbought} (overbought signal)"
+            return None, None
+        
         return fn
 
+    # -------------------------------------------------------------------------
+    # Moving Average Crossover
+    # -------------------------------------------------------------------------
+    
     elif strategy == "moving_average_crossover":
-        fast = params.get("fast_period", 50)
-        slow = params.get("slow_period", 200)
+        fast = int(_first_param(
+            params,
+            "fast_period",
+            "fast",
+            "short_period",
+            "fast_window",
+            default=10,
+        ))
+        slow = int(_first_param(
+            params,
+            "slow_period",
+            "slow",
+            "long_period",
+            "slow_window",
+            default=30,
+        ))
 
         def fn(data):
-            if len(data) < slow:
-                return None
+            required_bars = max(fast, slow) + 1
+            if len(data) < required_bars:
+                return None, None
             close   = data["close"]
             fast_ma = close.rolling(fast).mean()
             slow_ma = close.rolling(slow).mean()
+            current_fast = round(float(fast_ma.iloc[-1]), 5)
+            current_slow = round(float(slow_ma.iloc[-1]), 5)
+
             if fast_ma.iloc[-1] > slow_ma.iloc[-1] and fast_ma.iloc[-2] <= slow_ma.iloc[-2]:
-                return "buy"
+                return ("buy", f"BUY - MA{fast} ({current_fast}) crossed above MA{slow} ({current_slow}) - bullish crossover")
             if fast_ma.iloc[-1] < slow_ma.iloc[-1] and fast_ma.iloc[-2] >= slow_ma.iloc[-2]:
-                return "sell"
-            return None
+                return ("sell", f"SELL - MA{fast} ({current_fast}) crossed below MA{slow} ({current_slow}) - bearish crossover")
+            return None, None
+        
         return fn
 
+    # -------------------------------------------------------------------------
+    # Bollinger Bands
+    # -------------------------------------------------------------------------
+    
     elif strategy == "bollinger_bands":
         period  = params.get("period", 20)
         std_dev = params.get("std_dev", 2.0)
 
         def fn(data):
             if len(data) < period:
-                return None
+                return None, None
             close  = data["close"]
             middle = close.rolling(period).mean()
             std    = close.rolling(period).std()
             upper  = (middle + std_dev * std).iloc[-1]
             lower  = (middle - std_dev * std).iloc[-1]
             price  = close.iloc[-1]
+            current_price = round(float(price), 5)
+            current_upper = round(float(upper), 5)
+            current_lower = round(float(lower), 5)
+            
             if price <= lower:
-                return "buy"
+                return ("buy", f"BUY - Price ({current_price}) touched lower band ({current_lower}) - oversold signal")
             if price >= upper:
-                return "sell"
-            return None
+                return ("sell", f"SELL - Price ({current_price}) touched upper band ({current_upper}) - overbought signal")
+            return None, None
+        
         return fn
 
+    # -------------------------------------------------------------------------
+    # MACD — Moving Average Convergence Divergence
+    # -------------------------------------------------------------------------
+    
     elif strategy == "macd":
         fast   = params.get("fast", 12)
         slow   = params.get("slow", 26)
@@ -129,23 +216,27 @@ def _build_strategy(strategy: str, params: Dict[str, Any]):
 
         def fn(data):
             if len(data) < slow:
-                return None
+                return None, None
             close    = data["close"]
             ema_fast = close.ewm(span=fast,   adjust=False).mean()
             ema_slow = close.ewm(span=slow,   adjust=False).mean()
             macd     = ema_fast - ema_slow
             sig_line = macd.ewm(span=signal,  adjust=False).mean()
+            current_macd   = round(float(macd.iloc[-1]),     6)
+            current_signal = round(float(sig_line.iloc[-1]), 6)
+            
             if macd.iloc[-1] > sig_line.iloc[-1] and macd.iloc[-2] <= sig_line.iloc[-2]:
-                return "buy"
+                return ("buy", f"BUY - MACD ({current_macd}) crossed above signal line ({current_signal}) - bullish momentum")
             if macd.iloc[-1] < sig_line.iloc[-1] and macd.iloc[-2] >= sig_line.iloc[-2]:
-                return "sell"
-            return None
+                return ("sell", f"SELL - MACD ({current_macd}) crossed below signal line ({current_signal}) - bearish momentum")
+            return None, None
+        
         return fn
 
     else:
         raise ValueError(
             f"Unknown strategy '{strategy}'. "
-            f"Supported: rsi, moving_average_crossover, bollinger_bands, macd"
+            f"Supported: rsi, sma, sma_cross, moving_average_crossover, bollinger, bollinger_bands, macd"
         )
 
 
@@ -179,7 +270,7 @@ class BacktestService:
         data_source:       str = "auto",
     ) -> Dict[str, Any]:
         """
-        Full backtest pipeline.
+        Full parameterized backtest pipeline.
 
         Args:
             user_id:           Supabase auth user UUID
@@ -189,7 +280,7 @@ class BacktestService:
             end_date:          "YYYY-MM-DD"
             timeframe:         "1d" or "1wk"
             initial_capital:   Starting capital
-            strategy_name:     rsi | moving_average_crossover | bollinger_bands | macd
+            strategy_name:     rsi | sma | moving_average_crossover | bollinger | bollinger_bands | macd
             strategy_params:   Strategy-specific parameters
             cost_preset:       From CostModel presets
             position_size_pct: Fraction of capital per trade
@@ -290,7 +381,7 @@ class BacktestService:
         self,
         user_id: str,
         pair:    Optional[str] = None,
-        limit:   int = 20
+        limit:   int = 100
     ) -> List[Dict]:
         """List completed backtests for a user, newest first."""
         return db.backtests.list(user_id, pair=pair, limit=limit)
@@ -345,8 +436,6 @@ class BacktestService:
         from core.database import get_db
         get_db().table("backtests").delete().eq("id", backtest_id).execute()
         return True
-<<<<<<< Updated upstream
-=======
     
     
     # =========================================================================
@@ -797,4 +886,4 @@ except Exception as e:
             logger.error(f"Custom backtest {backtest_id} failed: {e}")
             db.backtests.set_status(backtest_id, "failed", error=str(e))
             raise
->>>>>>> Stashed changes
+
