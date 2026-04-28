@@ -546,9 +546,61 @@ class BacktestService:
         # Remove consistent leading whitespace from the whole block
         code = textwrap.dedent(code)
 
-        return code.strip()
-    
+        # ── NEW: Fix common LLM docstring indentation issues ─────────────
+        # Re-indent any triple-quoted strings that are at column 0
+        # inside a function body
+        # ── Step 4: Fix lines dropped to column 0 inside functions ───────
+        lines = code.split('\n')
+        fixed = []
+        inside_func = False
+        expect_indented_block = False  # True right after a def: line
+
+        for line in lines:
+            stripped = line.strip()
+
+            if stripped == '':
+                fixed.append(line)
+                continue
+
+            current_indent = len(line) - len(line.lstrip())
+
+            # Track function/class definitions
+            if (stripped.startswith('def ') or stripped.startswith('class ')) and stripped.endswith(':'):
+                inside_func = True
+                expect_indented_block = True  # next non-blank line must be indented
+                fixed.append(line)
+                continue
+
+            # Module-level imports — keep as is, reset expectation
+            if stripped.startswith('import ') or stripped.startswith('from '):
+                if not inside_func:
+                    expect_indented_block = False
+                fixed.append(line)
+                continue
+
+            # If we just saw a def: and this line has no indentation — add 4 spaces
+            if expect_indented_block and current_indent == 0:
+                fixed.append('    ' + line)
+                expect_indented_block = False
+                continue
+
+            # Any line at col 0 inside a function — add 4 spaces
+            if inside_func and current_indent == 0 and not stripped.startswith('def ') and not stripped.startswith('class ') and not stripped.startswith('@'):
+                fixed.append('    ' + line)
+            else:
+                expect_indented_block = False
+                fixed.append(line)
+
+        code = '\n'.join(fixed)
+        code = textwrap.dedent(code).strip()
+        return code
+        
     def _validate_code_safety(self, code: str) -> None:
+        logger.info(f"RAW CODE REPR: {repr(code[:300])}")  # ADD THIS
+        code = code.strip() if code else ""
+        
+        code = self._normalize_code(code)
+        logger.info(f"NORMALIZED CODE REPR: {repr(code[:300])}")  # ADD THIS
         """
         Security gate for user-submitted strategy code.
 
@@ -569,10 +621,6 @@ class BacktestService:
             "shutil.",     "pathlib.",    "importlib",
         ]
 
-        code = code.strip() if code else ""
-        
-        code = self._normalize_code(code)
-        
         # Check for forbidden operations in the raw code
         code_lower = code.lower()
         for token in FORBIDDEN:
@@ -581,7 +629,7 @@ class BacktestService:
                     f"Code contains a forbidden operation: '{token}'. "
                     f"Only pandas and numpy are allowed."
                 )
-
+        
         # Check for required function definition
         if "def generate_signals" not in code:
             raise ValueError(
@@ -595,26 +643,40 @@ class BacktestService:
             raise ValueError(
                 "Code exceeds the 10 KB size limit. Please simplify your strategy."
             )
-
-        # PRIMARY SYNTAX CHECK: Parse raw code to catch all syntax errors
-        # This catches errors like 'continue' not in loop, invalid indentation, etc.
+            
+        # ── Step 5: Syntax check using compile() only ──
+        # compile() correctly handles docstrings with unindented content.
+        # Do NOT use ast.parse() — it misreads unindented docstring lines
+        # as module-level code and raises false IndentationErrors.
         try:
-            tree = ast.parse(code)
-        except SyntaxError as exc:
+            compile(code, "<string>", "exec")
+        except SyntaxError as e:
             raise ValueError(
-                f"Custom strategy has invalid Python syntax: {exc.msg} "
-                f"(line {exc.lineno}). Please fix the code and try again."
-            ) from exc
-
-        # Verify function exists and is valid
-        function_names = {
-            node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
-        }
-        if "generate_signals" not in function_names:
-            raise ValueError(
-                "Code must define a valid 'generate_signals(data)' function. "
-                "Put your logic and return statement inside that function."
+                f"Strategy has a syntax error: {e}. "
+                f"Please check your code for common issues like "
+                f"'continue' or 'break' outside of loops, missing colons, "
+                f"or incorrect indentation."
             )
+        
+        # # PRIMARY SYNTAX CHECK: Parse raw code to catch all syntax errors
+        # # This catches errors like 'continue' not in loop, invalid indentation, etc.
+        # try:
+        #     tree = ast.parse(code)
+        # except SyntaxError as exc:
+        #     raise ValueError(
+        #         f"Custom strategy has invalid Python syntax: {exc.msg} "
+        #         f"(line {exc.lineno}). Please fix the code and try again."
+        #     ) from exc
+
+        # # Verify function exists and is valid
+        # function_names = {
+        #     node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+        # }
+        # if "generate_signals" not in function_names:
+        #     raise ValueError(
+        #         "Code must define a valid 'generate_signals(data)' function. "
+        #         "Put your logic and return statement inside that function."
+        #     )
 
     # -------------------------------------------------------------------------
 
@@ -943,7 +1005,13 @@ except Exception as e:
         """
         pair = pair.upper()
 
+         # ADD THIS TEMPORARILY
+        logger.info(f"Code received (first 200 chars): {repr(custom_code[:200])}")
+        
         custom_code = self._normalize_code(custom_code)
+        
+         # ADD THIS TEMPORARILY  
+        logger.info(f"Code after normalize (first 200 chars): {repr(custom_code[:200])}")
         
         # ── Step 1: Validate code safety (BEFORE normalization) ────────────────
         # Raises ValueError immediately — no DB row created yet
@@ -1000,7 +1068,8 @@ except Exception as e:
 
             # ── Step 4: Execute strategy in sandbox ───────────────────────────
             signals = await self._execute_strategy_code(custom_code, data)
-
+            
+            
             # ── Step 5: Build PerformanceMetrics-compatible dict ──────────────
             results_dict = self._build_custom_results_dict(
                 data, signals, initial_capital
