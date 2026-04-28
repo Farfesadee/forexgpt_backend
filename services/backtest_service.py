@@ -134,6 +134,8 @@ def _normalize_custom_code(code: str) -> str:
 # Returns a callable compatible with BacktestEngine.run_backtest()
 # ============================================================================
 
+import math
+
 def _make_serializable(obj):
     """Convert pandas/numpy types to JSON-serializable Python types."""
     if isinstance(obj, dict):
@@ -142,12 +144,15 @@ def _make_serializable(obj):
         return [_make_serializable(i) for i in obj]
     elif hasattr(obj, 'isoformat'):  # datetime, Timestamp
         return obj.isoformat()
-    elif isinstance(obj, (np.integer,)):
+    elif isinstance(obj, (np.integer, int)):
         return int(obj)
-    elif isinstance(obj, (np.floating,)):
-        return float(obj)
+    elif isinstance(obj, (np.floating, float)):
+        val = float(obj)
+        if math.isnan(val) or math.isinf(val):
+            return None
+        return val
     elif isinstance(obj, np.ndarray):
-        return obj.tolist()
+        return [_make_serializable(i) for i in obj.tolist()]
     return obj
 
 
@@ -943,10 +948,17 @@ except Exception as e:
                 daily_ret = (float(close.iloc[i]) - float(close.iloc[i - 1])) / float(close.iloc[i - 1])
                 equity   *= (1 + daily_ret * pos_running)
 
-            equity_curve.append({
+            record = {
                 "date":         dates[i],
                 "total_equity": round(equity, 4),
-            })
+            }
+            # Include price action for the chart
+            if 'open' in data.columns: record['open'] = float(data['open'].iloc[i])
+            if 'high' in data.columns: record['high'] = float(data['high'].iloc[i])
+            if 'low' in data.columns:  record['low']  = float(data['low'].iloc[i])
+            if 'close' in data.columns: record['close'] = float(data['close'].iloc[i])
+            
+            equity_curve.append(record)
 
         final_capital = equity_curve[-1]["total_equity"] if equity_curve else initial_capital
 
@@ -1112,3 +1124,4 @@ except Exception as e:
             logger.error(f"Custom backtest {backtest_id} failed: {e}")
             db.backtests.set_status(backtest_id, "failed", error=str(e))
             raise
+

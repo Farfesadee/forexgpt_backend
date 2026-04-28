@@ -1,6 +1,6 @@
 import logging
 import requests
-import xml.etree.ElementTree as ET
+from bs4 import BeautifulSoup
 from fastapi import APIRouter
 import random
 
@@ -19,14 +19,19 @@ def get_news():
         response = requests.get("https://www.dailyfx.com/feeds/forex-market-news", timeout=8)
         response.raise_for_status()
         
-        # Parse XML
-        root = ET.fromstring(response.content)
+        # Parse XML using BeautifulSoup with html.parser for robustness
+        soup = BeautifulSoup(response.content, "html.parser")
         news_items = []
         
         # Extract items
-        for item in root.findall(".//item")[:10]:
-            title = item.find("title").text if item.find("title") is not None else "Forex Market Update"
-            link = item.find("link").text if item.find("link") is not None else "#"
+        items = soup.find_all("item")
+        for item in items[:10]:
+            title_tag = item.find("title")
+            link_tag = item.find("link")
+            
+            title = title_tag.text if title_tag else "Forex Market Update"
+            link = link_tag.text if link_tag else "#"
+            
             news_items.append({
                 "title": title.strip(),
                 "link": link,
