@@ -241,7 +241,7 @@ def generate_signals(data):
 """
 
 # ── Replace with your actual test user UUID ───────────────────────────────────
-TEST_USER_ID = "c1d333a7-aba4-4ac7-acad-0895e798b8de"
+TEST_USER_ID = "a792422a-cbb7-40e2-b7cd-f396f1c45b32"
 
 
 async def run_integration_test():
@@ -263,16 +263,16 @@ async def run_integration_test():
             data_source="csv",
         )
         metrics = result.get("metrics", {})
-        print(f"  ✅ Status:         {result.get('status')}")
-        print(f"  ✅ strategy_name:  {result.get('strategy_name')}")
-        print(f"  ✅ Total trades:   {metrics.get('total_trades')}")
-        print(f"  ✅ Total return:   {metrics.get('total_return_pct')}%")
-        print(f"  ✅ Sharpe ratio:   {metrics.get('sharpe_ratio')}")
-        print(f"  ✅ Max drawdown:   {metrics.get('max_drawdown_pct')}%")
-        print(f"  ✅ Win rate:       {metrics.get('win_rate_pct')}%")
-        print(f"  ✅ Backtest ID:    {result.get('id')}")
+        print(f"  [OK] Status:         {result.get('status')}")
+        print(f"  [OK] strategy_name:  {result.get('strategy_name')}")
+        print(f"  [OK] Total trades:   {metrics.get('total_trades')}")
+        print(f"  [OK] Total return:   {metrics.get('total_return_pct')}%")
+        print(f"  [OK] Sharpe ratio:   {metrics.get('sharpe_ratio')}")
+        print(f"  [OK] Max drawdown:   {metrics.get('max_drawdown_pct')}%")
+        print(f"  [OK] Win rate:       {metrics.get('win_rate_pct')}%")
+        print(f"  [OK] Backtest ID:    {result.get('id')}")
     except Exception as e:
-        print(f"  ❌ FAILED: {e}")
+        print(f"  [FAIL] FAILED: {e}")
 
     # ── Test 2: MA Crossover strategy ────────────────────────────────────────
     print("\n[2/3] Running custom MA Crossover strategy on EURUSD...")
@@ -288,12 +288,12 @@ async def run_integration_test():
             data_source="csv",
         )
         metrics = result.get("metrics", {})
-        print(f"  ✅ Status:         {result.get('status')}")
-        print(f"  ✅ Total trades:   {metrics.get('total_trades')}")
-        print(f"  ✅ Total return:   {metrics.get('total_return_pct')}%")
-        print(f"  ✅ Sharpe ratio:   {metrics.get('sharpe_ratio')}")
+        print(f"  [OK] Status:         {result.get('status')}")
+        print(f"  [OK] Total trades:   {metrics.get('total_trades')}")
+        print(f"  [OK] Total return:   {metrics.get('total_return_pct')}%")
+        print(f"  [OK] Sharpe ratio:   {metrics.get('sharpe_ratio')}")
     except Exception as e:
-        print(f"  ❌ FAILED: {e}")
+        print(f"  [FAIL] FAILED: {e}")
 
     # ── Test 3: Dangerous code is rejected before DB row is created ───────────
     print("\n[3/3] Verifying dangerous code is rejected at validation...")
@@ -305,11 +305,11 @@ async def run_integration_test():
             start_date="2021-01-01",
             end_date="2023-12-29",
         )
-        print("  ❌ FAILED — dangerous code was not rejected!")
+        print("  [FAIL] FAILED — dangerous code was not rejected!")
     except ValueError as e:
-        print(f"  ✅ Correctly rejected: {e}")
+        print(f"  [OK] Correctly rejected: {e}")
     except Exception as e:
-        print(f"  ⚠️  Unexpected error type: {e}")
+        print(f"  [WARN] Unexpected error type: {e}")
 
     print("\n" + "=" * 60)
     print("Stage 2 complete. Check Supabase backtests table for new rows.")
