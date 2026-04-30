@@ -24,13 +24,13 @@ import numpy as np
 import pandas as pd
 import logging
 import ast
-import ast
 import textwrap
 import re
 import subprocess
 import tempfile
 import os
 import pandas as pd
+import ast
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
 
@@ -874,14 +874,11 @@ except Exception as e:
         # Raises ValueError immediately — no DB row created yet
         # Validate raw code first to catch syntax errors in original submission
         self._validate_code_safety(custom_code)
+        
+        # # Only normalize AFTER validation passes
+        # custom_code = _normalize_custom_code(custom_code)
 
-        logger.info(
-            f"Custom backtest: {pair} [{start_date} -> {end_date}] user={user_id}"
-        )
-
-        # ── Step 2: Create pending DB row ─────────────────────────────────────
-        # strategy_name = "custom" so it appears correctly in history list
-        # custom_code stored in strategy_config for the improve-loop
+        # 2. Create pending row
         record = db.backtests.create(user_id, {
             "strategy_id":     None,
             "pair":            pair,
