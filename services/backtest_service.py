@@ -21,6 +21,7 @@ Error handling:
 """
 import json
 import numpy as np
+import pandas as pd
 import logging
 import ast
 import textwrap
@@ -536,84 +537,12 @@ class BacktestService:
     # CUSTOM STRATEGY — PRIVATE HELPERS
     # =========================================================================
 
-    def _normalize_code(self, code: str) -> str:
-        """
-        Normalize LLM-generated code indentation.
-        Fixes mixed tabs/spaces which cause IndentationError in Python 3.
-        Called before both validation and execution.
-        """
-        # Normalize line endings
-        code = code.replace('\r\n', '\n').replace('\r', '\n')
-
-        # Convert ALL tabs to 4 spaces — fixes mixed tab/space indentation
-        code = code.expandtabs(4)
-
-        # Remove consistent leading whitespace from the whole block
-        code = textwrap.dedent(code)
-
-        # ── NEW: Fix common LLM docstring indentation issues ─────────────
-        # Re-indent any triple-quoted strings that are at column 0
-        # inside a function body
-        # ── Step 4: Fix lines dropped to column 0 inside functions ───────
-        lines = code.split('\n')
-        fixed = []
-        inside_func = False
-        expect_indented_block = False  # True right after a def: line
-
-        for line in lines:
-            stripped = line.strip()
-
-            if stripped == '':
-                fixed.append(line)
-                continue
-
-            current_indent = len(line) - len(line.lstrip())
-
-            # Track function/class definitions
-            if (stripped.startswith('def ') or stripped.startswith('class ')) and stripped.endswith(':'):
-                inside_func = True
-                expect_indented_block = True  # next non-blank line must be indented
-                fixed.append(line)
-                continue
-
-            # Module-level imports — keep as is, reset expectation
-            if stripped.startswith('import ') or stripped.startswith('from '):
-                if not inside_func:
-                    expect_indented_block = False
-                fixed.append(line)
-                continue
-
-            # If we just saw a def: and this line has no indentation — add 4 spaces
-            if expect_indented_block and current_indent == 0:
-                fixed.append('    ' + line)
-                expect_indented_block = False
-                continue
-
-            # Any line at col 0 inside a function — add 4 spaces
-            if inside_func and current_indent == 0 and not stripped.startswith('def ') and not stripped.startswith('class ') and not stripped.startswith('@'):
-                fixed.append('    ' + line)
-            else:
-                expect_indented_block = False
-                fixed.append(line)
-
-        code = '\n'.join(fixed)
-        code = textwrap.dedent(code).strip()
-        return code
-        
     def _validate_code_safety(self, code: str) -> None:
-        logger.info(f"RAW CODE REPR: {repr(code[:300])}")  # ADD THIS
-        code = code.strip() if code else ""
-        
-        code = self._normalize_code(code)
-        logger.info(f"NORMALIZED CODE REPR: {repr(code[:300])}")  # ADD THIS
         """
         Security gate for user-submitted strategy code.
 
         Checks for dangerous operations and enforces the
         generate_signals(data) contract.
-        
-        This should be called on RAW code before normalization to catch
-        syntax errors in the original submission, not in extracted code.
 
         Raises:
             ValueError: if code is unsafe or missing the required function.
@@ -626,7 +555,6 @@ class BacktestService:
             "shutil.",     "pathlib.",    "importlib",
         ]
 
-        # Check for forbidden operations in the raw code
         code_lower = code.lower()
         for token in FORBIDDEN:
             if token.lower() in code_lower:
@@ -634,8 +562,7 @@ class BacktestService:
                     f"Code contains a forbidden operation: '{token}'. "
                     f"Only pandas and numpy are allowed."
                 )
-        
-        # Check for required function definition
+
         if "def generate_signals" not in code:
             raise ValueError(
                 "Code must define a 'generate_signals(data)' function. "
@@ -643,70 +570,18 @@ class BacktestService:
                 "Series of signals: 1 = BUY, -1 = SELL, 0 = HOLD."
             )
 
-        # Check code size BEFORE processing
         if len(code) > 10_000:
             raise ValueError(
                 "Code exceeds the 10 KB size limit. Please simplify your strategy."
             )
-            
-        # ── Step 5: Syntax check using compile() only ──
-        # compile() correctly handles docstrings with unindented content.
-        # Do NOT use ast.parse() — it misreads unindented docstring lines
-        # as module-level code and raises false IndentationErrors.
-        try:
-            compile(code, "<string>", "exec")
-        except SyntaxError as e:
-            raise ValueError(
-                f"Strategy has a syntax error: {e}. "
-                f"Please check your code for common issues like "
-                f"'continue' or 'break' outside of loops, missing colons, "
-                f"or incorrect indentation."
-            )
-        
-        # # PRIMARY SYNTAX CHECK: Parse raw code to catch all syntax errors
-        # # This catches errors like 'continue' not in loop, invalid indentation, etc.
-        # try:
-        #     tree = ast.parse(code)
-        # except SyntaxError as exc:
-        #     raise ValueError(
-        #         f"Custom strategy has invalid Python syntax: {exc.msg} "
-        #         f"(line {exc.lineno}). Please fix the code and try again."
-        #     ) from exc
-
-        # # Verify function exists and is valid
-        # function_names = {
-        #     node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
-        # }
-        # if "generate_signals" not in function_names:
-        #     raise ValueError(
-        #         "Code must define a valid 'generate_signals(data)' function. "
-        #         "Put your logic and return statement inside that function."
-        #     )
 
     # -------------------------------------------------------------------------
 
-    def _normalize_code(self, code: str) -> str:
-        """
-        Normalize LLM-generated code indentation.
-        Fixes mixed tabs/spaces which cause IndentationError in Python 3.
-        Called before both validation and execution.
-        """
-        # Normalize line endings
-        code = code.replace('\r\n', '\n').replace('\r', '\n')
-
-        # Convert ALL tabs to 4 spaces — fixes mixed tab/space indentation
-        code = code.expandtabs(4)
-
-        # Remove consistent leading whitespace from the whole block
-        code = textwrap.dedent(code)
-
-        return code.strip()
-    
     async def _execute_strategy_code(
         self,
         code: str,
         data,           # pd.DataFrame with lowercase columns incl. 'close'
-    ) -> None:
+    ):
         """
         Execute user strategy code in an isolated subprocess.
 
@@ -721,8 +596,11 @@ class BacktestService:
             ValueError: strategy execution error (shown to user).
             Exception:  timeout or output parsing failure.
         """
-        
-        code = self._normalize_code(code)
+        import subprocess
+        import tempfile
+        import os
+        import pandas as pd
+
         data_file = tempfile.NamedTemporaryFile(
             mode="w", suffix=".json", delete=False, encoding="utf-8"
         )
@@ -792,20 +670,12 @@ except Exception as e:
                 try:
                     output = json.loads(result.stdout)
                     if not output.get("success"):
-                        raise ValueError(f"Strategy execution error: {output.get('error', 'unknown error')}")
+                        raise ValueError(f"Strategy error: {output.get('error', 'unknown error')}")
                 except (json.JSONDecodeError, KeyError):
                     err = result.stderr.strip().splitlines()
-                    error_msg = err[-1] if err else result.stderr
-                    
-                    # Provide more helpful error messages for common issues
-                    if "SyntaxError:" in error_msg:
-                        raise ValueError(
-                            f"Strategy has a syntax error: {error_msg}. "
-                            f"Please check your code for common issues like 'continue' or 'break' "
-                            f"outside of loops, missing colons, or incorrect indentation."
-                        )
-                    else:
-                        raise ValueError(f"Strategy execution failed: {error_msg}")
+                    raise ValueError(
+                        f"Strategy execution failed: {err[-1] if err else result.stderr}"
+                    )
 
             # Parse output
             try:
@@ -842,137 +712,6 @@ except Exception as e:
 
     # -------------------------------------------------------------------------
 
-    def _build_custom_results_dict(
-        self,
-        data,               # pd.DataFrame — price data with 'close' column
-        signals,            # pd.Series — 1/−1/0 per row
-        initial_capital: float,
-    ) -> dict:
-        """
-        Adapter: converts raw signals + price data into the dict shape
-        that PerformanceMetrics expects, so we reuse all existing metric
-        calculations without duplication.
-
-        PerformanceMetrics needs:
-            initial_capital, final_capital,
-            trades: [{net_pnl, gross_pnl, holding_days, entry_date,
-                      exit_date, entry_price, exit_price, side,
-                      spread_cost, slippage_cost, commission,
-                      financing_cost, exchange_fees, total_cost}]
-            equity_curve: [{date, total_equity}]
-
-        Custom strategies have no cost model, so all cost fields are 0.
-        This is intentional — the user wrote the code, cost modelling
-        is the domain of the parameterised path.
-        """
-        import pandas as pd
-        import numpy as np
-
-        close     = data["close"].reset_index(drop=True)
-        sig       = signals.reset_index(drop=True).fillna(0).astype(int)
-
-        # ── Build trade list ──────────────────────────────────────────────────
-        trades       = []
-        position     = 0        # 0 = flat, 1 = long, -1 = short
-        entry_price  = 0.0
-        entry_idx    = 0
-
-        # Derive date index — handle both DatetimeIndex and integer index
-        if hasattr(data.index, "to_pydatetime"):
-            dates = list(data.index)
-        elif "date" in data.columns:
-            dates = list(pd.to_datetime(data["date"]))
-        else:
-            dates = list(range(len(data)))
-
-        for i in range(len(sig)):
-            signal = int(sig.iloc[i])
-
-            if position == 0 and signal in (1, -1):
-                # Open position
-                position    = signal
-                entry_price = float(close.iloc[i])
-                entry_idx   = i
-
-            elif position != 0 and (signal == -position or signal == 0):
-                # Close position
-                exit_price   = float(close.iloc[i])
-                holding_days = i - entry_idx
-                gross_pnl    = (exit_price - entry_price) * position
-                net_pnl      = gross_pnl   # no costs on custom path
-
-                trades.append({
-                    "entry_date":     dates[entry_idx],
-                    "exit_date":      dates[i],
-                    "entry_price":    round(entry_price, 5),
-                    "exit_price":     round(exit_price, 5),
-                    "side":           "buy" if position == 1 else "sell",
-                    "holding_days":   holding_days,
-                    "gross_pnl":      round(gross_pnl, 6),
-                    "net_pnl":        round(net_pnl, 6),
-                    "return_pct":     round((gross_pnl / entry_price) * 100, 4),
-                    "quantity":       1.0,
-                    "signal_reason":  None,   # not applicable for custom code
-                    # Cost fields — zero for custom strategies
-                    "spread_cost":    0.0,
-                    "slippage_cost":  0.0,
-                    "commission":     0.0,
-                    "financing_cost": 0.0,
-                    "exchange_fees":  0.0,
-                    "total_cost":     0.0,
-                })
-                position = 0
-
-                # Immediately re-open if new signal is opposite direction
-                if signal in (1, -1):
-                    position    = signal
-                    entry_price = float(close.iloc[i])
-                    entry_idx   = i
-
-        # ── Build equity curve ────────────────────────────────────────────────
-        # Simple daily mark-to-market: start at initial_capital,
-        # apply daily pct change only when in a position.
-        equity      = initial_capital
-        equity_curve = []
-        pos_running  = 0
-
-        for i in range(len(close)):
-            signal = int(sig.iloc[i])
-
-            if pos_running == 0 and signal in (1, -1):
-                pos_running = signal
-            elif pos_running != 0 and signal == 0:
-                pos_running = 0
-
-            if i > 0 and pos_running != 0:
-                daily_ret = (float(close.iloc[i]) - float(close.iloc[i - 1])) / float(close.iloc[i - 1])
-                equity   *= (1 + daily_ret * pos_running)
-
-            record = {
-                "date":         dates[i],
-                "total_equity": round(equity, 4),
-            }
-            # Include price action for the chart
-            if 'open' in data.columns: record['open'] = float(data['open'].iloc[i])
-            if 'high' in data.columns: record['high'] = float(data['high'].iloc[i])
-            if 'low' in data.columns:  record['low']  = float(data['low'].iloc[i])
-            if 'close' in data.columns: record['close'] = float(data['close'].iloc[i])
-            
-            equity_curve.append(record)
-
-        final_capital = equity_curve[-1]["total_equity"] if equity_curve else initial_capital
-
-        return {
-            "initial_capital": initial_capital,
-            "final_capital":   final_capital,
-            "trades":          trades,
-            "equity_curve":    equity_curve,
-        }
-
-    # =========================================================================
-    # CUSTOM STRATEGY — PUBLIC METHOD
-    # =========================================================================
-
     async def run_custom_strategy(
         self,
         user_id:           str,
@@ -980,108 +719,55 @@ except Exception as e:
         pair:              str,
         start_date:        str,
         end_date:          str,
-        timeframe:         str   = "1d",
+        timeframe:         str = "1d",
         initial_capital:   float = 10000.0,
         position_size_pct: float = 0.1,
-        data_source:       str   = "csv",
+        data_source:       str = "auto",
     ) -> Dict[str, Any]:
         """
-        Execute a user-generated strategy and return full backtest results.
-
-        Flow:
-            1. Validate code safety
-            2. Create pending DB row
-            3. Fetch price data (reuses existing DataFetcher)
-            4. Execute code in sandbox subprocess
-            5. Build PerformanceMetrics-compatible results dict
-            6. Calculate metrics via PerformanceMetrics (same as parameterised)
-            7. Save results to backtests table (same repo, strategy_name='custom')
-            8. Save trades to backtest_trades table
-            9. Increment profile counter
-           10. Return completed row
-
-        Args:
-            user_id:           Supabase auth user UUID
-            custom_code:       Python code containing generate_signals(data)
-            pair:              Currency pair e.g. "EURUSD"
-            start_date:        "YYYY-MM-DD"
-            end_date:          "YYYY-MM-DD"
-            timeframe:         "1d" | "1wk"
-            initial_capital:   Starting capital in USD
-            position_size_pct: Not used in cost calc but stored for reference
-            data_source:       "csv" recommended (yfinance unreliable for forex)
-
-        Returns:
-            The completed backtests row dict from Supabase
-            (identical shape to run_backtest() — same table, same fields)
+        Run a backtest using user-provided Python code.
         """
         pair = pair.upper()
+        logger.info(f"Custom Backtest: {pair} [{start_date} -> {end_date}] user={user_id}")
 
-         # ADD THIS TEMPORARILY
-        logger.info(f"Code received (first 200 chars): {repr(custom_code[:200])}")
-        
-        custom_code = self._normalize_code(custom_code)
-        
-         # ADD THIS TEMPORARILY  
-        logger.info(f"Code after normalize (first 200 chars): {repr(custom_code[:200])}")
-        
-        # ── Step 1: Validate code safety (BEFORE normalization) ────────────────
+        # ── Step 1: Validate code safety ──────────────────────────────────────
         # Raises ValueError immediately — no DB row created yet
-        # Validate raw code first to catch syntax errors in original submission
         self._validate_code_safety(custom_code)
         
         # # Only normalize AFTER validation passes
         # custom_code = _normalize_custom_code(custom_code)
 
-        logger.info(
-            f"Custom backtest: {pair} [{start_date} -> {end_date}] user={user_id}"
-        )
-
-        # ── Step 2: Create pending DB row ─────────────────────────────────────
-        # strategy_name = "custom" so it appears correctly in history list
-        # custom_code stored in strategy_config for the improve-loop
+        # 2. Create pending row
         record = db.backtests.create(user_id, {
+            "strategy_id":     None,
             "pair":            pair,
             "start_date":      start_date,
             "end_date":        end_date,
             "timeframe":       timeframe,
             "initial_capital": initial_capital,
             "strategy_name":   "custom",
-            "strategy_id":     None,
             "strategy_config": {
-                "strategy_params":  {},            # no predefined params for custom code
-                "cost_preset":      "none",
+                "strategy_params":   {},
+                "cost_preset":       "forex_retail",
                 "position_size_pct": position_size_pct,
                 "data_source":       data_source,
-                "custom_code":       custom_code,   # stored for CodeGen improve-loop
-            },
+                "custom_code":       custom_code
+            }
         })
         backtest_id = record["id"]
-        logger.info(f"Created pending custom backtest {backtest_id}")
 
         try:
-            # ── Step 3: Fetch price data ──────────────────────────────────────
-            # Reuses existing DataFetcher — same as parameterised path
+            # 3. Fetch data
             fetcher = DataFetcher()
-            df      = fetcher.fetch(
-                pair, start_date, end_date,
-                interval=timeframe, source=data_source
-            )
-
+            df = fetcher.fetch(pair, start_date, end_date, interval=timeframe, source=data_source)
+            
             data = df.reset_index()
-            col  = "Date" if "Date" in data.columns else data.columns[0]
+            col = "Date" if "Date" in data.columns else data.columns[0]
             data = data.rename(columns={col: "date"})
 
-            if data.empty:
-                raise ValueError(
-                    f"No price data available for {pair} "
-                    f"from {start_date} to {end_date}."
-                )
-
-            # ── Step 4: Execute strategy in sandbox ───────────────────────────
+            # 4. Execute custom strategy code to get signals
             signals = await self._execute_strategy_code(custom_code, data)
-            
-            
+
             # ── Step 5: Build PerformanceMetrics-compatible dict ──────────────
             results_dict = self._build_custom_results_dict(
                 data, signals, initial_capital
@@ -1090,34 +776,21 @@ except Exception as e:
             # ── Step 6: Calculate metrics (reuses PerformanceMetrics) ─────────
             metrics = PerformanceMetrics(results_dict).calculate_all_metrics()
 
-            # ── Step 7: Save results (triggers DB denormalization trigger) ─────
+            # 7. Save results
             db.backtests.save_results(backtest_id, {
                 "metrics":      _make_serializable(metrics),
-                "equity_curve": _make_serializable(
-                    results_dict.get("equity_curve", [])
-                ),
+                "equity_curve": _make_serializable(raw_results.get("equity_curve", [])),
             })
 
-            # ── Step 8: Save trades ───────────────────────────────────────────
-            trades = results_dict.get("trades", [])
-            if trades:
-                db.backtests.save_trades(
-                    backtest_id, user_id, _make_serializable(trades)
-                )
+            if raw_results.get("trades"):
+                db.backtests.save_trades(backtest_id, user_id, _make_serializable(raw_results["trades"]))
 
-            # ── Step 9: Increment profile counter (non-critical) ──────────────
+            # 8. Increment profile counter
             try:
                 db.profiles.increment_counter(user_id, "backtests")
             except Exception as e:
                 logger.warning(f"Could not increment profile counter: {e}")
 
-            logger.info(
-                f"Custom backtest {backtest_id} completed: "
-                f"{metrics['total_trades']} trades, "
-                f"{metrics['total_return_pct']}% return"
-            )
-
-            # ── Step 10: Return completed row (same shape as run_backtest) ─────
             return db.backtests.get(backtest_id)
 
         except Exception as e:
@@ -1125,3 +798,91 @@ except Exception as e:
             db.backtests.set_status(backtest_id, "failed", error=str(e))
             raise
 
+    def _validate_code_safety(self, code: str):
+        """
+        Basic static analysis to prevent dangerous code execution.
+        """
+        if len(code) > 10000:
+            raise ValueError("Strategy code too large (max 10 KB).")
+
+        try:
+            tree = ast.parse(code)
+        except SyntaxError as e:
+            raise ValueError(f"Syntax error in strategy code: {e}")
+
+        # Check for required function
+        has_func = any(
+            isinstance(node, ast.FunctionDef) and node.name == "generate_signals"
+            for node in tree.body
+        )
+        if not has_func:
+            raise ValueError("Code must define a 'generate_signals(data)' function.")
+
+        # Forbidden keywords and modules
+        forbidden = {
+            "os", "subprocess", "sys", "shutil", "requests", "httpx", "socket",
+            "eval", "exec", "open", "__import__", "getattr", "setattr", "delattr",
+            "pickle", "marshal", "builtins", "__builtin__", "globals", "locals"
+        }
+
+        for node in ast.walk(tree):
+            # Check for imports
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name.split('.')[0] in forbidden:
+                        raise ValueError(f"Import of module '{alias.name}' is forbidden.")
+            elif isinstance(node, ast.ImportFrom):
+                if node.module and node.module.split('.')[0] in forbidden:
+                    raise ValueError(f"Import from module '{node.module}' is forbidden.")
+            
+            # Check for function calls
+            elif isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name):
+                    if node.func.id in forbidden:
+                        raise ValueError(f"Call to function '{node.func.id}' is forbidden.")
+                elif isinstance(node.func, ast.Attribute):
+                    if node.func.attr in forbidden:
+                        raise ValueError(f"Access to attribute '{node.func.attr}' is forbidden.")
+
+    async def _execute_strategy_code(self, code: str, data: pd.DataFrame) -> pd.Series:
+        """
+        Executes user code in a restricted environment and returns signals.
+        """
+        # Prepare restricted globals
+        restricted_globals = {
+            "pd": pd,
+            "np": np,
+            "__builtins__": {
+                "__import__": __import__,  # Needed for 'import' statements to work
+                "range": range, "len": len, "list": list, "dict": dict, "set": set,
+                "int": int, "float": float, "str": str, "bool": bool, "round": round,
+                "min": min, "max": max, "sum": sum, "abs": abs, "enumerate": enumerate,
+                "zip": zip, "any": any, "all": all, "sorted": sorted, "reversed": reversed,
+                "Exception": Exception, "ValueError": ValueError, "TypeError": TypeError,
+                "RuntimeError": RuntimeError
+            }
+        }
+        
+        try:
+            # Execute the code to define the functions in restricted_globals
+            exec(code, restricted_globals)
+            
+            if "generate_signals" not in restricted_globals:
+                raise ValueError("generate_signals function not found after execution.")
+            
+            # Call the function
+            signals = restricted_globals["generate_signals"](data)
+            
+            # Convert to pandas series
+            if not isinstance(signals, (list, np.ndarray, pd.Series)):
+                raise ValueError("generate_signals must return a list, numpy array, or pandas Series.")
+            
+            sig_series = pd.Series(signals)
+            if len(sig_series) != len(data):
+                raise ValueError(f"Signal length ({len(sig_series)}) does not match data length ({len(data)}).")
+            
+            return sig_series
+
+        except Exception as e:
+            logger.error(f"Error executing custom strategy: {e}")
+            raise ValueError(f"Strategy runtime error: {e}")
