@@ -489,6 +489,8 @@ DB calls use public.generated_codes and public.codegen_conversations.
 import uuid
 import asyncio
 import re
+import ast
+import textwrap
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any
 from prompts.codegen_prompt import CODEGEN_SYSTEM_PROMPT
@@ -512,6 +514,26 @@ _PROMPT_ECHO_MARKERS = (
 )
 
 
+def _sanitize_generated_code(code: str) -> str:
+    """Normalize model-produced code before saving or returning it."""
+    text = (code or "").replace("\r\n", "\n").strip()
+    if not text:
+        return ""
+
+    if "```python" in text:
+        start = text.find("```python") + len("```python")
+        end = text.find("```", start)
+        if end != -1:
+            text = text[start:end]
+    elif "```" in text:
+        start = text.find("```") + 3
+        end = text.find("```", start)
+        if end != -1:
+            text = text[start:end]
+
+    return textwrap.dedent(text).strip()
+
+
 def _normalize_timestamp(value) -> str:
     """
     Normalize DB timestamp values to ISO format (includes year).
@@ -530,6 +552,29 @@ def _normalize_timestamp(value) -> str:
         except ValueError:
             return raw
     return str(value)
+
+
+def _validate_generated_code(code: str) -> Tuple[bool, Optional[str]]:
+    """
+    Validate generated Python code syntax.
+    
+    Returns:
+        Tuple of (is_valid, error_message)
+        - (True, None) if code is syntactically valid
+        - (False, error_message) if code has syntax errors
+    """
+    if not code or not code.strip():
+        return False, "Generated code is empty."
+    
+    try:
+        ast.parse(code)
+        return True, None
+    except SyntaxError as exc:
+        error_msg = (
+            f"Code has invalid Python syntax at line {exc.lineno}: {exc.msg}. "
+            f"Please ask for it to be fixed or try again with a different strategy description."
+        )
+        return False, error_msg
 
 
 class CodeGenService:
@@ -609,6 +654,9 @@ class CodeGenService:
             response = await self._generate_response(messages)
             code, explanation = self._parse_response(response)
 
+            # Validate code syntax
+            syntax_valid, syntax_error = _validate_generated_code(code)
+
             # Persist conversation turns
             self._save_message(conversation_id, user_id, "user", persisted_user_message)
             self._save_message(conversation_id, user_id, "assistant", response)
@@ -636,6 +684,8 @@ class CodeGenService:
                 "code_id":         saved_row.get("id"),
                 "language":        "python",
                 "timestamp":       datetime.utcnow().isoformat(),
+                "syntax_valid":    syntax_valid,
+                "syntax_error":    syntax_error,
             }
 
         except Exception as e:
@@ -974,15 +1024,15 @@ class CodeGenService:
         if "```python" in response:
             start = response.find("```python") + len("```python")
             end   = response.find("```", start)
-            code  = response[start:end].strip()
+            code  = _sanitize_generated_code(response[start:end])
             explanation = (response[:response.find("```python")] + response[end + 3:]).strip()
         elif "```" in response:
             start = response.find("```") + 3
             end   = response.find("```", start)
-            code  = response[start:end].strip()
+            code  = _sanitize_generated_code(response[start:end])
             explanation = (response[:response.find("```")] + response[end + 3:]).strip()
         else:
-            code        = response.strip()
+            code        = _sanitize_generated_code(response)
             explanation = "Generated trading strategy code."
 
         code = self._normalize_code(code)

@@ -77,6 +77,8 @@ class GenerateCodeResponse(BaseModel):
     code_id: Optional[str] = None
     language: str
     timestamp: str
+    syntax_valid: bool = True
+    syntax_error: Optional[str] = None
 
     class Config:
         json_schema_extra = {
@@ -85,7 +87,9 @@ class GenerateCodeResponse(BaseModel):
                 "explanation": "This strategy uses RSI to identify mean reversion opportunities...",
                 "conversation_id": "uuid-here",
                 "language": "python",
-                "timestamp": "2024-01-01T00:00:00"
+                "timestamp": "2024-01-01T00:00:00",
+                "syntax_valid": True,
+                "syntax_error": None
             }
         }
 
@@ -128,3 +132,5 @@ class ImproveStrategyResponse(BaseModel):
     code_id: Optional[str] = None
     language: str
     timestamp: str
+    syntax_valid: bool = True
+    syntax_error: Optional[str] = None
