@@ -651,8 +651,60 @@ class CodeGenService:
                 {"role": "user", "content": llm_message},
             ]
 
-            response = await self._generate_response(messages)
-            code, explanation = self._parse_response(response)
+            max_attempts = 3
+            for attempt in range(max_attempts):
+                response = await self._generate_response(messages)
+                code, explanation = self._parse_response(response)
+                
+                if not code:
+                    break
+                    
+                try:
+                    import ast
+                    compile(code, "<string>", "exec")
+                    tree = ast.parse(code)
+                    has_func = any(
+                        isinstance(node, ast.FunctionDef) and node.name == "generate_signals"
+                        for node in tree.body
+                    )
+                    if not has_func:
+                        raise ValueError("Code must define a 'generate_signals(data)' function.")
+                        
+                    # Basic forbidden modules check to prevent runtime failure
+                    forbidden = {
+                        "os", "subprocess", "sys", "shutil", "requests", "httpx", "socket",
+                        "eval", "exec", "open", "__import__", "getattr", "setattr", "delattr",
+                        "pickle", "marshal"
+                    }
+                    for node in ast.walk(tree):
+                        if isinstance(node, ast.Import):
+                            for alias in node.names:
+                                if alias.name.split('.')[0] in forbidden:
+                                    raise ValueError(f"Import of module '{alias.name}' is forbidden.")
+                        elif isinstance(node, ast.ImportFrom):
+                            if node.module and node.module.split('.')[0] in forbidden:
+                                raise ValueError(f"Import from module '{node.module}' is forbidden.")
+                                
+                    # Passed validation
+                    break
+                    
+                except (SyntaxError, ValueError) as e:
+                    if attempt < max_attempts - 1:
+                        logger.warning(f"Self-healing trigger. Code failed validation: {str(e)}")
+                        error_hint = ""
+                        if "return' outside function" in str(e):
+                            error_hint = "\n\nHINT: You have a `return` statement at the very edge (column 0) instead of indented inside your function. Please indent the `return` statement by 4 spaces so it is inside the `generate_signals` function!"
+                        elif "unexpected indent" in str(e) or "expected an indented block" in str(e):
+                            error_hint = "\n\nHINT: Check your indentation. All code inside `generate_signals` must be indented by 4 spaces, and loops/if-statements must have an indented block under them."
+                            
+                        # Prompt the model to fix the syntax error
+                        messages.append({"role": "assistant", "content": response})
+                        messages.append({
+                            "role": "user",
+                            "content": f"The code you generated failed validation with this error:\n{str(e)}{error_hint}\n\nPlease fix this error and output the complete corrected code in exactly ONE Python code block.\n\nIMPORTANT: Do NOT apologize or explain how you fixed the syntax error. Your explanation after the code block MUST ONLY describe the trading strategy logic."
+                        })
+                    else:
+                        logger.warning("Max self-healing attempts reached. Returning last generated code.")
 
             # Validate code syntax
             syntax_valid, syntax_error = _validate_generated_code(code)
@@ -963,64 +1015,30 @@ class CodeGenService:
                 f"- Include docstrings and comments"
             )
         
-    def _normalize_code(self, code: str) -> str:
-        """
-        Auto-fix common indentation errors from LLM-generated code.
-        Specifically targets lines that dropped to column 0 inside a function body.
-        """
-        import ast
-
-        # First try — if code is already valid, return as-is
-        try:
-            ast.parse(code)
-            return code
-        except SyntaxError:
-            pass
-
-        lines = code.split("\n")
-        fixed = []
-        indent_stack = [0]  # track expected indentation levels
-        inside_function = False
-        expected_indent = 0
-
-        for i, line in enumerate(lines):
-            stripped = line.lstrip()
-
-            # Blank lines pass through
-            if not stripped:
-                fixed.append(line)
-                continue
-
-            current_indent = len(line) - len(stripped)
-
-            # Detect function/class definition — sets context
-            if stripped.startswith(("def ", "class ")):
-                inside_function = True
-                expected_indent = current_indent + 4
-                indent_stack = [current_indent]
-                fixed.append(line)
-                continue
-
-            # If inside a function and line dropped to column 0 unexpectedly
-            if inside_function and current_indent == 0 and not stripped.startswith(("def ", "class ", "#", "@")):
-                # Re-indent to expected level
-                fixed.append(" " * expected_indent + stripped)
-            else:
-                fixed.append(line)
-
-        fixed_code = "\n".join(fixed)
-
-        # Validate — if still broken, return original and let it fail naturally
-        try:
-            ast.parse(fixed_code)
-            return fixed_code
-        except SyntaxError:
-            return code
-
     def _parse_response(self, response: str) -> Tuple[str, str]:
         """Split model response into (code, explanation)."""
         response = self._clean_response_text(response)
 
+        import re
+        # Find all markdown code blocks (with or without 'python' label)
+        blocks = re.findall(r"```(?:python)?\s*\n(.*?)\n```", response, re.DOTALL)
+        
+        if blocks:
+            # Pick the longest block to ensure we get the main script, not tiny snippets
+            code = max(blocks, key=len).strip()
+            explanation = re.sub(r"```(?:python)?\s*\n.*?\n```", "", response, flags=re.DOTALL).strip()
+        else:
+            # Fallback if AI forgot backticks but still wrote the function
+            if "def generate_signals" in response:
+                code = response.strip()
+                explanation = "Generated trading strategy code."
+            else:
+                # It's likely just a conversational response, no code
+                code = ""
+                explanation = response.strip()
+
+        # Replace all tabs with 4 spaces to ensure consistent Python indentation
+        code = code.replace('\t', '    ')
         if "```python" in response:
             start = response.find("```python") + len("```python")
             end   = response.find("```", start)
@@ -1035,7 +1053,6 @@ class CodeGenService:
             code        = _sanitize_generated_code(response)
             explanation = "Generated trading strategy code."
 
-        code = self._normalize_code(code)
         return code, explanation
 
     async def _generate_response(self, messages: List[Dict]) -> str:
@@ -1165,7 +1182,8 @@ Provide:
         if not text:
             return ""
 
-        text = self._collapse_duplicate_paragraphs(text)
+        # We MUST NOT call _collapse_duplicate_paragraphs here because it splits by 
+        # blank lines and strips leading spaces, completely destroying Python indentation!
 
         first_code_block = text.find("```")
         if first_code_block > 0:

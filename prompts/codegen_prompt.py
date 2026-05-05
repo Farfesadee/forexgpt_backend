@@ -104,8 +104,10 @@ NEVER repeat or echo back the user's request, description, or any prompt
 sections (e.g. do NOT reprint "BACKTEST RESULTS:", "ORIGINAL CODE:",
 "EXPERT ANALYSIS:", or the strategy description before your response).
 
-Start your response IMMEDIATELY with the code or explanation.
-Keep output focused: code block first, then a concise explanation.
+Start your response IMMEDIATELY with the code.
+CRITICAL: You MUST output EXACTLY ONE single ```python code block containing ALL your code (imports, helper functions, and generate_signals). 
+NEVER split the code into multiple blocks. The entire complete, runnable script must be in the first and only code block.
+Keep output focused: ONE code block first, then a concise explanation.
 
 CRITICAL PYTHON SYNTAX RULES:
 - Do NOT use docstrings (triple-quoted strings \"\"\" or \'\'\') anywhere in the code
@@ -165,10 +167,19 @@ def generate_signals(data: pd.DataFrame) -> list:
             signals.append(-1)
         else:
             signals.append(0)
-    
+            
+    # CRITICAL: This return MUST be indented by 4 spaces (inside the function!)
     return signals
 
 This structure is MANDATORY - the backtesting engine expects exactly this format.
+
+═══════════════════════════════════════════════════════════════
+INDENTATION RULES (CRITICAL)
+═══════════════════════════════════════════════════════════════
+CRITICAL: ALL logic inside `generate_signals` MUST BE INDENTED by 4 spaces!
+The `for i in range(len(data)):` loop and `return signals` statement MUST BE INDENTED inside the `generate_signals` function block.
+DO NOT put `for i in range(...)` or `return signals` at the top level (column 0). 
+Failure to indent these properly will cause an `'return' outside function` SyntaxError!
 
 ═══════════════════════════════════════════════════════════════
 STANDARD IMPORTS
@@ -189,8 +200,13 @@ CODE REQUIREMENTS
 2. Include docstrings for all functions
 3. Add inline comments for complex logic
 4. Follow PEP 8 style guidelines
-5. Include error handling (array bounds, edge cases)
-6. Make code backtesting-ready with clear entry/exit logic
+5. Make code backtesting-ready with clear entry/exit logic
+
+CRITICAL EDGE CASES YOU MUST ALWAYS HANDLE:
+- Prevent Array Bounds Errors: ALWAYS handle `i == 0` when checking previous rows like `iloc[i-1]`. If you evaluate `iloc[-1]`, it reads the END of the dataset instead of the previous row, destroying the backtest logic! Use `if i == 0: continue`.
+- Prevent ZeroDivisionError: ALWAYS check denominators before division (e.g., `if stop_loss_pips == 0: return 0` in position sizing).
+- Prevent KeyErrors: ALWAYS check if required columns (like 'close', 'high', 'low') exist in `data.columns` before using them.
+- Handle NaN values: Indicators often produce NaNs at the beginning of the dataset. Use `pd.isna()` to check for NaNs before using indicator values in logic.
 
 DO NOT INCLUDE:
 - Data fetching code (backtester provides data)
@@ -231,7 +247,8 @@ def generate_signals(data: pd.DataFrame) -> list:
     for i in range(len(data)):
         # Strategy logic
         pass
-    
+        
+    # CRITICAL: This return MUST be indented by 4 spaces (inside the function!)
     return signals
 ```
 
@@ -305,21 +322,42 @@ When improving a strategy based on backtest results and mentor feedback:
 3. TRANSLATE MENTOR CONCEPTS TO CODE
    
    Mentor: "Add trend filter"
-   Code:
+   Code (Notice how EVERYTHING is properly indented inside the function!):
 ```python
-   adx = calculate_adx(data, period=14)
-   if adx.iloc[i] < 25:  # Ranging market
-       signals.append(0)
+def generate_signals(data: pd.DataFrame) -> list:
+    signals = []
+    adx = calculate_adx(data['close'], period=14)
+    
+    for i in range(len(data)):
+        if adx.iloc[i] < 25:  # Ranging market
+            signals.append(0)
+            continue
+            
+        # ... rest of logic ...
+        
+    return signals
 ```
    
    Mentor: "Implement risk management"
-   Code:
+   Code (Notice how EVERYTHING is properly indented inside the function!):
 ```python
-   # 2% stop loss
-   if position != 0:
-       loss_pct = (data['close'].iloc[i] - entry_price) / entry_price
-       if loss_pct < -0.02:
-           signals.append(-position)  # Exit
+def generate_signals(data: pd.DataFrame) -> list:
+    signals = []
+    position = 0
+    entry_price = 0
+    
+    for i in range(len(data)):
+        # 2% stop loss
+        if position != 0:
+            loss_pct = (data['close'].iloc[i] - entry_price) / entry_price
+            if loss_pct < -0.02:
+                signals.append(-position)  # Exit
+                position = 0
+                continue
+                
+        # ... rest of logic ...
+        
+    return signals
 ```
 
 4. OUTPUT FORMAT
