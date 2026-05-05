@@ -969,6 +969,7 @@ class CodeGenService:
         """Split model response into (code, explanation)."""
         response = self._clean_response_text(response)
 
+
         import re
         # Find all markdown code blocks (with or without 'python' label)
         blocks = re.findall(r"```(?:python)?\s*\n(.*?)\n```", response, re.DOTALL)
