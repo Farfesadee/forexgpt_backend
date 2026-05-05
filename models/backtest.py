@@ -222,3 +222,11 @@ class RunCustomBacktestRequest(BaseModel):
 # so the returned row has the identical shape — no new response model needed.
 # Import alias added here for explicitness in the route file:
 RunCustomBacktestResponse = RunBacktestResponse
+
+
+class ValidateCustomCodeRequest(BaseModel):
+    custom_code: str = Field(..., description="Python code to validate")
+
+class ValidateCustomCodeResponse(BaseModel):
+    valid: bool
+    error: Optional[str] = None

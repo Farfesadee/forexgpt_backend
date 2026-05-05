@@ -549,6 +549,9 @@ class BacktestService:
             raise ValueError("Strategy code too large (max 10 KB).")
 
         try:
+            # compile() catches deeper semantic syntax errors (like 'return outside function') 
+            # that ast.parse() sometimes misses
+            compile(code, "<string>", "exec")
             tree = ast.parse(code)
         except SyntaxError as e:
             raise ValueError(f"Syntax error in strategy code: {e}")

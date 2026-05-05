@@ -14,6 +14,8 @@ from models.backtest import (
     DeleteBacktestResponse,
     RunCustomBacktestRequest,      
     RunCustomBacktestResponse,
+    ValidateCustomCodeRequest,
+    ValidateCustomCodeResponse,
 )
 from core.dependencies import get_backtest_service
 from api.middleware.auth_middleware import get_current_user
@@ -182,3 +184,20 @@ async def run_custom_backtest(
     except Exception as e:
         # Data fetch failures, timeout, unexpected errors
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/run/custom/validate", response_model=ValidateCustomCodeResponse)
+async def validate_custom_backtest_code(
+    request: ValidateCustomCodeRequest,
+    user: JWTPayload = Depends(get_current_user),
+):
+    """
+    Validates custom strategy code statically before running a backtest.
+    """
+    try:
+        service._validate_code_safety(request.custom_code)
+        return {"valid": True, "error": None}
+    except ValueError as e:
+        return {"valid": False, "error": str(e)}
+    except Exception as e:
+        return {"valid": False, "error": str(e)}
