@@ -24,6 +24,13 @@ import numpy as np
 import pandas as pd
 import logging
 import ast
+import textwrap
+import re
+import subprocess
+import tempfile
+import os
+import pandas as pd
+import ast
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
 
@@ -39,6 +46,89 @@ logger = logging.getLogger(__name__)
 
 class BacktestExecutionTimeoutError(RuntimeError):
     """Raised when sandboxed custom strategy execution exceeds the time limit."""
+
+
+_CODE_LINE_RE = re.compile(
+    r"^\s*(from\s+\w+\s+import|import\s+\w+|def\s+\w+|class\s+\w+|@|#|[A-Za-z_]\w*\s*=)"
+)
+
+
+def _is_parseable_python(text: str) -> bool:
+    try:
+        ast.parse(text)
+        return True
+    except SyntaxError:
+        return False
+
+
+def _extract_parseable_code(text: str) -> str:
+    """
+    Recover the real Python block from mixed AI output.
+
+    Handles cases where the payload accidentally includes prose before/after
+    the strategy code even though the caller expected pure Python.
+    """
+    lines = text.splitlines()
+    candidate_starts = [0]
+    candidate_starts.extend(
+        idx for idx, line in enumerate(lines) if _CODE_LINE_RE.match(line)
+    )
+
+    seen: set[int] = set()
+    for start_idx in candidate_starts:
+        if start_idx in seen:
+            continue
+        seen.add(start_idx)
+
+        candidate = textwrap.dedent("\n".join(lines[start_idx:])).strip()
+        if not candidate or "def generate_signals" not in candidate:
+            continue
+
+        if _is_parseable_python(candidate):
+            return candidate
+
+        candidate_lines = candidate.splitlines()
+        for end_idx in range(len(candidate_lines) - 1, 0, -1):
+            trimmed = "\n".join(candidate_lines[:end_idx]).strip()
+            if "def generate_signals" not in trimmed:
+                continue
+            if _is_parseable_python(trimmed):
+                return trimmed
+
+    return text
+
+
+def _normalize_custom_code(code: str) -> str:
+    """Strip markdown fences and leading indentation from generated code."""
+    text = (code or "").replace("\r\n", "\n").strip()
+    if not text:
+        return ""
+
+    if "```python" in text:
+        start = text.find("```python") + len("```python")
+        end = text.find("```", start)
+        if end != -1:
+            text = text[start:end]
+    elif "```" in text:
+        start = text.find("```") + 3
+        end = text.find("```", start)
+        if end != -1:
+            text = text[start:end]
+
+    text = textwrap.dedent(text).strip()
+    
+    # ── Extract parseable code only as fallback for mixed AI output ────────
+    # Note: _extract_parseable_code may trim lines to make code parseable,
+    # so it should only be used if the stripped markdown code doesn't work.
+    # Try parsing the stripped code first before attempting extraction.
+    try:
+        ast.parse(text)
+        # Code is parseable as-is, return it
+        return text
+    except SyntaxError:
+        # Code has syntax errors, try extracting from mixed content
+        # This will attempt to find the longest parseable block
+        return _extract_parseable_code(text).strip()
 
 
 # ============================================================================
@@ -95,6 +185,10 @@ def _build_strategy(strategy: str, params: Dict[str, Any]):
 
     # Accept the common shorthand used by the frontend/test prompts.
     if strategy in {"sma", "sma_cross", "sma_crossover"}:
+        strategy = "moving_average_crossover"
+    if strategy == "sma_cross":
+        strategy = "moving_average_crossover"
+    if strategy == "ma_cross":
         strategy = "moving_average_crossover"
     if strategy == "bollinger":
         strategy = "bollinger_bands"
@@ -438,9 +532,316 @@ class BacktestService:
         from core.database import get_db
         get_db().table("backtests").delete().eq("id", backtest_id).execute()
         return True
+    
+    
+    # =========================================================================
+    # CUSTOM STRATEGY — PRIVATE HELPERS
+    # =========================================================================
+
+    def _normalize_code(self, code: str) -> str:
+        """
+        Normalize LLM-generated code indentation.
+        Fixes mixed tabs/spaces which cause IndentationError in Python 3.
+        Called before both validation and execution.
+        """
+        # Normalize line endings
+        code = code.replace('\r\n', '\n').replace('\r', '\n')
+
+        # Convert ALL tabs to 4 spaces — fixes mixed tab/space indentation
+        code = code.expandtabs(4)
+
+        # Remove consistent leading whitespace from the whole block
+        code = textwrap.dedent(code)
+
+        # ── NEW: Fix common LLM docstring indentation issues ─────────────
+        # Re-indent any triple-quoted strings that are at column 0
+        # inside a function body
+        # ── Step 4: Fix lines dropped to column 0 inside functions ───────
+        lines = code.split('\n')
+        fixed = []
+        inside_func = False
+        expect_indented_block = False  # True right after a def: line
+
+        for line in lines:
+            stripped = line.strip()
+
+            if stripped == '':
+                fixed.append(line)
+                continue
+
+            current_indent = len(line) - len(line.lstrip())
+
+            # Track function/class definitions
+            if (stripped.startswith('def ') or stripped.startswith('class ')) and stripped.endswith(':'):
+                inside_func = True
+                expect_indented_block = True  # next non-blank line must be indented
+                fixed.append(line)
+                continue
+
+            # Module-level imports — keep as is, reset expectation
+            if stripped.startswith('import ') or stripped.startswith('from '):
+                if not inside_func:
+                    expect_indented_block = False
+                fixed.append(line)
+                continue
+
+            # If we just saw a def: and this line has no indentation — add 4 spaces
+            if expect_indented_block and current_indent == 0:
+                fixed.append('    ' + line)
+                expect_indented_block = False
+                continue
+
+            # Any line at col 0 inside a function — add 4 spaces
+            if inside_func and current_indent == 0 and not stripped.startswith('def ') and not stripped.startswith('class ') and not stripped.startswith('@'):
+                fixed.append('    ' + line)
+            else:
+                expect_indented_block = False
+                fixed.append(line)
+
+        code = '\n'.join(fixed)
+        code = textwrap.dedent(code).strip()
+        return code
+        
+    def _validate_code_safety(self, code: str) -> None:
+        logger.info(f"RAW CODE REPR: {repr(code[:300])}")  # ADD THIS
+        code = code.strip() if code else ""
+        
+        code = self._normalize_code(code)
+        logger.info(f"NORMALIZED CODE REPR: {repr(code[:300])}")  # ADD THIS
+        """
+        Security gate for user-submitted strategy code.
+
+        Checks for dangerous operations and enforces the
+        generate_signals(data) contract.
+        
+        This should be called on RAW code before normalization to catch
+        syntax errors in the original submission, not in extracted code.
+
+        Raises:
+            ValueError: if code is unsafe or missing the required function.
+        """
+        FORBIDDEN = [
+            "os.system",   "subprocess",  "eval(",    "exec(",
+            "__import__",  "open(",       "file(",    "input(",
+            "requests.",   "urllib.",     "socket.",  "sys.exit",
+            "compile(",    "globals(",    "locals(",  "vars(",
+            "shutil.",     "pathlib.",    "importlib",
+        ]
+
+        # Check for forbidden operations in the raw code
+        code_lower = code.lower()
+        for token in FORBIDDEN:
+            if token.lower() in code_lower:
+                raise ValueError(
+                    f"Code contains a forbidden operation: '{token}'. "
+                    f"Only pandas and numpy are allowed."
+                )
+        
+        # Check for required function definition
+        if "def generate_signals" not in code:
+            raise ValueError(
+                "Code must define a 'generate_signals(data)' function. "
+                "It receives a pandas DataFrame and must return a list or "
+                "Series of signals: 1 = BUY, -1 = SELL, 0 = HOLD."
+            )
+
+        # Check code size BEFORE processing
+        if len(code) > 10_000:
+            raise ValueError(
+                "Code exceeds the 10 KB size limit. Please simplify your strategy."
+            )
+            
+        # ── Step 5: Syntax check using compile() only ──
+        # compile() correctly handles docstrings with unindented content.
+        # Do NOT use ast.parse() — it misreads unindented docstring lines
+        # as module-level code and raises false IndentationErrors.
+        try:
+            compile(code, "<string>", "exec")
+        except SyntaxError as e:
+            raise ValueError(
+                f"Strategy has a syntax error: {e}. "
+                f"Please check your code for common issues like "
+                f"'continue' or 'break' outside of loops, missing colons, "
+                f"or incorrect indentation."
+            )
+        
+        # # PRIMARY SYNTAX CHECK: Parse raw code to catch all syntax errors
+        # # This catches errors like 'continue' not in loop, invalid indentation, etc.
+        # try:
+        #     tree = ast.parse(code)
+        # except SyntaxError as exc:
+        #     raise ValueError(
+        #         f"Custom strategy has invalid Python syntax: {exc.msg} "
+        #         f"(line {exc.lineno}). Please fix the code and try again."
+        #     ) from exc
+
+        # # Verify function exists and is valid
+        # function_names = {
+        #     node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+        # }
+        # if "generate_signals" not in function_names:
+        #     raise ValueError(
+        #         "Code must define a valid 'generate_signals(data)' function. "
+        #         "Put your logic and return statement inside that function."
+        #     )
 
     # -------------------------------------------------------------------------
-    # RUN CUSTOM
+
+    def _normalize_code(self, code: str) -> str:
+        """
+        Normalize LLM-generated code indentation.
+        Fixes mixed tabs/spaces which cause IndentationError in Python 3.
+        Called before both validation and execution.
+        """
+        # Normalize line endings
+        code = code.replace('\r\n', '\n').replace('\r', '\n')
+
+        # Convert ALL tabs to 4 spaces — fixes mixed tab/space indentation
+        code = code.expandtabs(4)
+
+        # Remove consistent leading whitespace from the whole block
+        code = textwrap.dedent(code)
+
+        return code.strip()
+    
+    async def _execute_strategy_code(
+        self,
+        code: str,
+        data,           # pd.DataFrame with lowercase columns incl. 'close'
+    ) -> None:
+        """
+        Execute user strategy code in an isolated subprocess.
+
+        The subprocess receives price data via a temp JSON file,
+        runs generate_signals(data), and prints the signals as JSON.
+        A 30-second timeout kills runaway code.
+
+        Returns:
+            pd.Series of signals (1 / -1 / 0), same length as data.
+
+        Raises:
+            ValueError: strategy execution error (shown to user).
+            Exception:  timeout or output parsing failure.
+        """
+        
+        code = self._normalize_code(code)
+        data_file = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False, encoding="utf-8"
+        )
+        code_file = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".py", delete=False, encoding="utf-8"
+        )
+
+        try:
+            # ── Write price data to temp JSON ─────────────────────────────────
+            data.to_json(data_file.name, orient="records", date_format="iso")
+            data_file.close()
+
+            data_file_path = data_file.name.replace("\\", "/")
+            
+            # ── Build the wrapper that loads data + calls user code ───────────
+            # Double-braces {{ }} are Python f-string escapes for literal { }
+            wrapper = f"""
+import pandas as pd
+import numpy as np
+import json, sys
+from typing import *
+
+# Load price data
+with open('{data_file_path}', 'r') as f:
+    records = json.load(f)
+
+data = pd.DataFrame(records)
+if 'date' in data.columns:
+    data['date'] = pd.to_datetime(data['date'])
+    data = data.set_index('date')
+
+# ── User strategy code ────────────────────────────────────────────
+{code}
+# ─────────────────────────────────────────────────────────────────
+
+try:
+    signals = generate_signals(data)
+
+    if isinstance(signals, pd.Series):
+        result = signals.fillna(0).astype(int).tolist()
+    elif isinstance(signals, (list, tuple)):
+        result = [int(s) for s in signals]
+    else:
+        result = list(signals)
+
+    print(json.dumps({{"signals": result, "success": True}}))
+
+except Exception as e:
+    print(json.dumps({{"error": str(e), "success": False}}))
+    sys.exit(1)
+"""
+            code_file.write(wrapper)
+            code_file.close()
+
+            # ── Run in subprocess with hard 40-second timeout ─────────────────
+            result = subprocess.run(
+                ["python", code_file.name],
+                capture_output=True,
+                text=True,
+                timeout=40,
+            )
+
+           
+            if result.returncode != 0:
+                # Try stdout first (strategy runtime errors land here as JSON)
+                # Fall back to stderr (syntax errors and subprocess failures)
+                try:
+                    output = json.loads(result.stdout)
+                    if not output.get("success"):
+                        raise ValueError(f"Strategy execution error: {output.get('error', 'unknown error')}")
+                except (json.JSONDecodeError, KeyError):
+                    err = result.stderr.strip().splitlines()
+                    error_msg = err[-1] if err else result.stderr
+                    
+                    # Provide more helpful error messages for common issues
+                    if "SyntaxError:" in error_msg:
+                        raise ValueError(
+                            f"Strategy has a syntax error: {error_msg}. "
+                            f"Please check your code for common issues like 'continue' or 'break' "
+                            f"outside of loops, missing colons, or incorrect indentation."
+                        )
+                    else:
+                        raise ValueError(f"Strategy execution failed: {error_msg}")
+
+            # Parse output
+            try:
+                output = json.loads(result.stdout)
+            except json.JSONDecodeError:
+
+                if not output.get("success"):
+                    raise ValueError(f"Strategy error: {output.get('error')}")
+
+            signals_series = pd.Series(output["signals"], dtype=float)
+
+            # Align length — pad/trim to match price data length
+            n = len(data)
+            if len(signals_series) < n:
+                signals_series = signals_series.reindex(range(n), fill_value=0)
+            elif len(signals_series) > n:
+                signals_series = signals_series.iloc[:n]
+
+            return signals_series
+
+        except subprocess.TimeoutExpired:
+            raise BacktestExecutionTimeoutError(
+                "Strategy execution timed out (40 s limit). "
+                "Simplify your logic or reduce the date range."
+            )
+
+        finally:
+            # Always clean up temp files
+            for path in (data_file.name, code_file.name):
+                try:
+                    os.unlink(path)
+                except Exception:
+                    pass
+
     # -------------------------------------------------------------------------
 
     async def run_custom_strategy(
@@ -461,8 +862,21 @@ class BacktestService:
         pair = pair.upper()
         logger.info(f"Custom Backtest: {pair} [{start_date} -> {end_date}] user={user_id}")
 
-        # 1. Validate code safety
+         # ADD THIS TEMPORARILY
+        logger.info(f"Code received (first 200 chars): {repr(custom_code[:200])}")
+        
+        custom_code = self._normalize_code(custom_code)
+        
+         # ADD THIS TEMPORARILY  
+        logger.info(f"Code after normalize (first 200 chars): {repr(custom_code[:200])}")
+        
+        # ── Step 1: Validate code safety (BEFORE normalization) ────────────────
+        # Raises ValueError immediately — no DB row created yet
+        # Validate raw code first to catch syntax errors in original submission
         self._validate_code_safety(custom_code)
+        
+        # # Only normalize AFTER validation passes
+        # custom_code = _normalize_custom_code(custom_code)
 
         # 2. Create pending row
         record = db.backtests.create(user_id, {

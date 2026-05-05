@@ -109,6 +109,15 @@ CRITICAL: You MUST output EXACTLY ONE single ```python code block containing ALL
 NEVER split the code into multiple blocks. The entire complete, runnable script must be in the first and only code block.
 Keep output focused: ONE code block first, then a concise explanation.
 
+CRITICAL PYTHON SYNTAX RULES:
+- Do NOT use docstrings (triple-quoted strings \"\"\" or \'\'\') anywhere in the code
+- Use single-line # comments only if explanation is needed
+- Every line inside a function body must be indented by exactly 4 spaces
+- Every line inside a loop or if block must be indented by exactly 8 spaces
+- No code, comments, or text should appear at column 0 except:
+  * import statements
+  * function definitions (def ...)
+  * top-level # comments
 ═══════════════════════════════════════════════════════════════
 SCOPE RESTRICTIONS (CRITICAL)
 ═══════════════════════════════════════════════════════════════
@@ -242,6 +251,36 @@ def generate_signals(data: pd.DataFrame) -> list:
     # CRITICAL: This return MUST be indented by 4 spaces (inside the function!)
     return signals
 ```
+
+CRITICAL INDENTATION RULE:
+ALL code must be inside the generate_signals(data) function body.
+No code should be at module level except import statements and
+helper function definitions.
+
+The generate_signals function must follow this exact structure:
+
+def generate_signals(data):
+    # ALL logic goes here, indented by 4 spaces
+    signals = []
+    
+    for i in range(len(data)):
+        # loop logic here, indented by 8 spaces
+        signals.append(0)
+    
+    return signals  # must be inside the function, indented by 4 spaces
+
+WRONG — this will fail:
+def generate_signals(data):
+    data['sma'] = data['close'].rolling(10).mean()
+
+signals = []        # ← WRONG: outside function
+return signals      # ← WRONG: outside function
+
+CORRECT:
+def generate_signals(data):
+    data['sma'] = data['close'].rolling(10).mean()
+    signals = []    # ← CORRECT: inside function
+    return signals  # ← CORRECT: inside function
 
 ═══════════════════════════════════════════════════════════════
 IMPROVEMENT MODE (Critical for Iteration Loop)
