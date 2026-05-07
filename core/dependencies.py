@@ -7,26 +7,24 @@
 
 # def get_mentor_service() -> MentorService:
 #     return MentorService(
-#         mistral_client, 
-#         supabase, 
+#         mistral_client,
+#         supabase,
 #         model_id=settings.MISTRAL_MODEL_ID
 #     )
 
 # def get_codegen_service() -> CodeGenService:
 #     return CodeGenService(
-#         mistral_client, 
-#         supabase, 
+#         mistral_client,
+#         supabase,
 #         model_id=settings.MISTRAL_MODEL_ID
 #     )
 
 # def get_signal_service() -> SignalService:
 #     return SignalService(
 #         hf_client,       # uses HuggingFace, not Mistral
-#         supabase, 
+#         supabase,
 #         model_id=settings.SIGNAL_MODEL_ID
 #     )
-
-
 
 
 #              ..
@@ -64,8 +62,7 @@
 #         model_id=settings.SIGNAL_MODEL_ID,
 #     )
 
-
-                # ..
+# ..
 # def get_signal_service() -> SignalService:
 #     return SignalService(
 #         mistral_client=mistral_client,
@@ -75,25 +72,6 @@
 
 # def get_backtest_service() -> BacktestService:
 #     return BacktestService()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # """
@@ -114,11 +92,6 @@
 # from services.codegen_service import CodeGenService
 # from services.signal_service import SignalService
 # from services.backtest_service import BacktestService
-
-
-
-
-
 
 
 # load_dotenv()
@@ -185,51 +158,6 @@
 #     return BacktestService()
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # old dep
 
 # """
@@ -257,7 +185,7 @@
 # # ============================================================================
 # # DEV MODE — set DEV_MODE=true in your .env to skip auth entirely
 # # ============================================================================
- 
+
 # DEV_MODE    = os.getenv("DEV_MODE", "false").lower() == "true"
 # DEV_USER_ID = "00000000-0000-0000-0000-000000000001"   # fake user_id used in dev mode
 
@@ -309,7 +237,7 @@
 #             detail="Invalid or expired token.",
 #             headers={"WWW-Authenticate": "Bearer"},
 #         )
-    
+
 # # ============================================================================
 # # SERVICE FACTORIES
 # # ============================================================================
@@ -338,69 +266,6 @@
 
 # def get_backtest_service() -> BacktestService:
 #     return BacktestService()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # """
@@ -521,29 +386,6 @@
 #     return BacktestService()
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 """
 core/dependencies.py
 FastAPI dependency injection factory.
@@ -576,9 +418,9 @@ def _parse_model_ids(raw_value: str) -> list[str]:
 
 def get_mentor_service() -> MentorService:
     return MentorService(
-        mistral_client = _require_mistral_client(),
-        db             = db,
-        model_id       = settings.MISTRAL_MODEL_ID,
+        mistral_client=_require_mistral_client(),
+        db=db,
+        model_id=settings.MISTRAL_MODEL_ID,
     )
 
 
@@ -586,14 +428,15 @@ def get_codegen_service() -> CodeGenService:
     return CodeGenService(
         mistral_client=_require_mistral_client(),
         model_id=settings.CODEGEN_MODEL_ID,
-        fallback_model_ids=_parse_model_ids(settings.MISTRAL_FALLBACK_MODEL_IDS),
+        fallback_model_ids=_parse_model_ids(
+            settings.MISTRAL_FALLBACK_MODEL_IDS),
     )
 
 
-def get_signal_service() -> SignalService:
+def get_signal_service():
     return SignalService(
-        mistral_client=_require_mistral_client(),
-        model_id=settings.SIGNAL_MODEL_ID,
+        runpod_endpoint_id=settings.RUNPOD_ENDPOINT_ID,
+        runpod_api_key=settings.RUNPOD_API_KEY,
     )
 
 
