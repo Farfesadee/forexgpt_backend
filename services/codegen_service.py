@@ -1021,20 +1021,26 @@ class CodeGenService:
         """Split model response into (code, explanation)."""
         response = self._clean_response_text(response)
 
-        if "```python" in response:
-            start = response.find("```python") + len("```python")
-            end   = response.find("```", start)
-            code  = _sanitize_generated_code(response[start:end])
-            explanation = (response[:response.find("```python")] + response[end + 3:]).strip()
-        elif "```" in response:
-            start = response.find("```") + 3
-            end   = response.find("```", start)
-            code  = _sanitize_generated_code(response[start:end])
-            explanation = (response[:response.find("```")] + response[end + 3:]).strip()
+        # Find markdown code blocks and use the largest one as the generated
+        # strategy, avoiding tiny examples that may appear in explanations.
+        blocks = re.findall(r"```(?:python|py)?\s*\n(.*?)\n```", response, re.DOTALL | re.IGNORECASE)
+        if blocks:
+            code = _sanitize_generated_code(max(blocks, key=len))
+            explanation = re.sub(
+                r"```(?:python|py)?\s*\n.*?\n```",
+                "",
+                response,
+                flags=re.DOTALL | re.IGNORECASE,
+            ).strip()
         else:
-            code        = _sanitize_generated_code(response)
-            explanation = "Generated trading strategy code."
+            if "def generate_signals" in response:
+                code = _sanitize_generated_code(response)
+                explanation = "Generated trading strategy code."
+            else:
+                code = ""
+                explanation = response.strip()
 
+        code = code.replace("\t", "    ")
         code = self._normalize_code(code)
         return code, explanation
 
@@ -1165,7 +1171,10 @@ Provide:
         if not text:
             return ""
 
-        text = self._collapse_duplicate_paragraphs(text)
+        # Do not collapse fenced responses: that helper strips leading
+        # whitespace from paragraphs, which breaks Python indentation.
+        if "```" not in text:
+            text = self._collapse_duplicate_paragraphs(text)
 
         first_code_block = text.find("```")
         if first_code_block > 0:
