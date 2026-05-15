@@ -227,7 +227,7 @@ def _build_strategy(strategy: str, params: Dict[str, Any]):
             if rsi.iloc[-1] < oversold  and rsi.iloc[-2] >= oversold:
                 return "buy", f"BUY - RSI = {current_rsi} dropped below {oversold} (oversold signal)"
             if rsi.iloc[-1] > overbought and rsi.iloc[-2] <= overbought:
-                return "sell", f"SELL - RSI = {current_rsi} rose above {overbought} (overbought signal)"
+                return "short", f"SELL SHORT - RSI = {current_rsi} rose above {overbought} (overbought signal)"
             return None, None
         
         return fn
@@ -267,7 +267,7 @@ def _build_strategy(strategy: str, params: Dict[str, Any]):
             if fast_ma.iloc[-1] > slow_ma.iloc[-1] and fast_ma.iloc[-2] <= slow_ma.iloc[-2]:
                 return ("buy", f"BUY - MA{fast} ({current_fast}) crossed above MA{slow} ({current_slow}) - bullish crossover")
             if fast_ma.iloc[-1] < slow_ma.iloc[-1] and fast_ma.iloc[-2] >= slow_ma.iloc[-2]:
-                return ("sell", f"SELL - MA{fast} ({current_fast}) crossed below MA{slow} ({current_slow}) - bearish crossover")
+                return ("short", f"SELL SHORT - MA{fast} ({current_fast}) crossed below MA{slow} ({current_slow}) - bearish crossover")
             return None, None
         
         return fn
@@ -296,7 +296,7 @@ def _build_strategy(strategy: str, params: Dict[str, Any]):
             if price <= lower:
                 return ("buy", f"BUY - Price ({current_price}) touched lower band ({current_lower}) - oversold signal")
             if price >= upper:
-                return ("sell", f"SELL - Price ({current_price}) touched upper band ({current_upper}) - overbought signal")
+                return ("short", f"SELL SHORT - Price ({current_price}) touched upper band ({current_upper}) - overbought signal")
             return None, None
         
         return fn
@@ -324,7 +324,7 @@ def _build_strategy(strategy: str, params: Dict[str, Any]):
             if macd.iloc[-1] > sig_line.iloc[-1] and macd.iloc[-2] <= sig_line.iloc[-2]:
                 return ("buy", f"BUY - MACD ({current_macd}) crossed above signal line ({current_signal}) - bullish momentum")
             if macd.iloc[-1] < sig_line.iloc[-1] and macd.iloc[-2] >= sig_line.iloc[-2]:
-                return ("sell", f"SELL - MACD ({current_macd}) crossed below signal line ({current_signal}) - bearish momentum")
+                return ("short", f"SELL SHORT - MACD ({current_macd}) crossed below signal line ({current_signal}) - bearish momentum")
             return None, None
         
         return fn
